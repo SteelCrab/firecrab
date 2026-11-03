@@ -97,6 +97,61 @@ pub struct TaskStart {
 fn invalid(message: impl Into<String>) -> Error {
     Error::Invalid(message.into())
 }
+/// Last step marker written by `guest_install.sh`; 1 before the first marker.
+fn preparation_step(log: &str) -> u8 {
+    log.lines()
+        .filter_map(|l| l.strip_prefix("FIRECRAB_STEP=")?.parse::<u8>().ok())
+        .rfind(|n| *n <= 4)
+        .unwrap_or(1)
+}
+/// The failed step and its last message, as a terminal would display it.
+fn preparation_failure(log: &str) -> String {
+    let step = preparation_step(log);
+    let stage = match step {
+        1 => "system packages",
+        2 => "Herdr terminal sessions",
+        3 => "coding CLI",
+        _ => "environment check",
+    };
+    // Only the failed step's output explains it; an earlier step's success line would mislead.
+    let cause = log
+        .lines()
+        .rev()
+        .take_while(|line| !line.starts_with("FIRECRAB_STEP="))
+        .map(displayed_line)
+        .find(|line| !line.is_empty());
+    match cause {
+        Some(cause) => {
+            format!("MicroVM environment preparation failed at step {step} of 4 ({stage}): {cause}")
+        }
+        None => format!(
+            "MicroVM environment preparation failed at step {step} of 4 ({stage}). Open the installation log for details."
+        ),
+    }
+}
+/// Drop ANSI escapes and control characters, keep the text after the last carriage return.
+fn displayed_line(line: &str) -> String {
+    let line = line
+        .rsplit('\r')
+        .find(|part| !part.is_empty())
+        .unwrap_or("");
+    let mut text = String::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.next() == Some('[') {
+                chars.find(|c| ('@'..='~').contains(c));
+            }
+        } else if !c.is_control() {
+            text.push(c);
+        }
+    }
+    let text = text.trim();
+    match text.char_indices().nth(240) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
+    }
+}
 fn executable(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).find_map(|dir| {
         let path = dir.join(if cfg!(windows) {
@@ -158,12 +213,7 @@ impl Runtime {
                     let mut bytes = Vec::new();
                     file.take(16384).read_to_end(&mut bytes)?;
                     let log = String::from_utf8_lossy(&bytes).into_owned();
-                    value["step"] = json!(
-                        log.lines()
-                            .filter_map(|l| l.strip_prefix("FIRECRAB_STEP=")?.parse::<u8>().ok())
-                            .rfind(|n| *n <= 4)
-                            .unwrap_or(1)
-                    );
+                    value["step"] = json!(preparation_step(&log));
                     value["log"] = json!(log);
                 }
                 if let Some(map) = value.as_object_mut() {
@@ -204,7 +254,10 @@ impl Runtime {
             let execute = || -> Result<(), Error> {
                 let script = format!(
                     "timeout 900 /bin/sh -c {} -- {}",
-                    guest::quote(include_str!("agents/guest_install.sh")),
+                    guest::quote(concat!(
+                        include_str!("agents/prepare_lock.sh"),
+                        include_str!("agents/guest_install.sh")
+                    )),
                     guest::quote(&cli)
                 );
                 let mut child = guest
@@ -218,9 +271,8 @@ impl Runtime {
                         return if status.success() {
                             Ok(())
                         } else {
-                            Err(invalid(
-                                "MicroVM environment preparation failed. Open the installation log for the failed step.",
-                            ))
+                            let log = fs::read(&log_path).unwrap_or_default();
+                            Err(invalid(preparation_failure(&String::from_utf8_lossy(&log))))
                         };
                     }
                     if Instant::now() > deadline {

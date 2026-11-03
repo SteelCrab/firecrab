@@ -236,7 +236,7 @@ if replies.exists():
   if match in script:
    import time
    time.sleep(reply.get('delayMs',0)/1000)
-   print(reply.get('out',''),end='')
+   print(reply.get('out',''),end='',flush=True)
    print(reply.get('err',''),end='',file=sys.stderr)
    sys.exit(reply.get('status',0))
 args=shlex.split(script)
@@ -612,6 +612,112 @@ fn environment_preparation_is_single_flight_and_retains_success_or_failure_logs(
         );
         assert!(runtime.prepare("gemini").is_err());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_preparation_reports_its_step_and_cause() {
+    for (out, err, expected) in [
+        (
+            "",
+            "Another environment preparation is running in this MicroVM.\n",
+            "MicroVM environment preparation failed at step 1 of 4 (system packages): Another environment preparation is running in this MicroVM.",
+        ),
+        (
+            "FIRECRAB_STEP=3\nCodex CLI installed successfully.\nFIRECRAB_STEP=4\n",
+            "",
+            "MicroVM environment preparation failed at step 4 of 4 (environment check). Open the installation log for details.",
+        ),
+        (
+            "FIRECRAB_STEP=1\nFIRECRAB_STEP=2\nFIRECRAB_STEP=3\n",
+            "\u{1b}[31mcurl: (6) Could not resolve host: claude.ai\u{1b}[0m\r\n",
+            "MicroVM environment preparation failed at step 3 of 4 (coding CLI): curl: (6) Could not resolve host: claude.ai",
+        ),
+        (
+            "FIRECRAB_STEP=1\nFIRECRAB_STEP=2\n",
+            "",
+            "MicroVM environment preparation failed at step 2 of 4 (Herdr terminal sessions). Open the installation log for details.",
+        ),
+    ] {
+        let (root, runtime, _) = workspace_fixture();
+        shell_replies(
+            root.path(),
+            json!({"timeout 900": {"out": out, "err": err, "status": 1}}),
+        );
+        runtime.prepare("codex").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let value = loop {
+            let value = runtime.preparation().unwrap();
+            if value["state"] != "installing" {
+                break value;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "VM preparation fixture did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(value["state"], "failed");
+        assert_eq!(value["error"], expected);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preparation_lock_recovers_abandoned_locks_but_not_live_owners() {
+    let root = tempfile::tempdir().unwrap();
+    let lock = root.path().join("prepare.lock");
+    let script = |tail: &str| format!("{}\n{tail}", include_str!("prepare_lock.sh"));
+    let acquire = || {
+        Command::new("sh")
+            .args(["-c", &script("prepare_lock \"$1\""), "--"])
+            .arg(&lock)
+            .output()
+            .unwrap()
+    };
+    // A VM stop skips the EXIT trap and leaves the previous boot's lock.
+    fs::create_dir(&lock).unwrap();
+    fs::write(lock.join("pid"), std::process::id().to_string()).unwrap();
+    fs::write(lock.join("boot"), "previous-boot").unwrap();
+    assert!(acquire().status.success());
+    assert_ne!(
+        fs::read_to_string(lock.join("boot")).unwrap(),
+        "previous-boot"
+    );
+    // Earlier scripts left a bare directory without an owner identity.
+    fs::remove_dir_all(&lock).unwrap();
+    fs::create_dir(&lock).unwrap();
+    assert!(
+        Command::new("touch")
+            .args(["-t", "202001010000"])
+            .arg(&lock)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(acquire().status.success());
+    // A live owner in this boot keeps the lock until it exits.
+    fs::remove_dir_all(&lock).unwrap();
+    let mut owner = Command::new("sh")
+        .args(["-c", &script("prepare_lock \"$1\" && exec sleep 30"), "--"])
+        .arg(&lock)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !lock.join("pid").exists() || fs::metadata(lock.join("pid")).unwrap().len() == 0 {
+        assert!(Instant::now() < deadline, "lock owner did not start");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    let busy = acquire();
+    assert!(!busy.status.success());
+    assert!(
+        String::from_utf8_lossy(&busy.stderr)
+            .contains("Another environment preparation is running")
+    );
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    assert!(acquire().status.success());
 }
 
 #[cfg(unix)]
