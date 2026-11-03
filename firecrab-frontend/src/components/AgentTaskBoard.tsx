@@ -6,7 +6,7 @@ import {
   Activity,
 } from "lucide-react";
 import { useI18n } from "../i18n";
-import type { AgentSession } from "../api/agents";
+import { agentModelLabel, type AgentSession } from "../api/agents";
 import AgentBrandIcon from "./icons/AgentBrandIcon";
 import "../styles/agent-board.css";
 
@@ -108,9 +108,9 @@ export default function AgentTaskBoard({
                     <ArrowUpRight aria-hidden="true" />
                   </span>
                   <strong>{agent.name}</strong>
-                  {agent.model && (
-                    <span className="am-board-card-model">{agent.model}</span>
-                  )}
+                  <span className="am-board-card-model">
+                    {agentModelLabel(agent, t("default", "기본값"))}
+                  </span>
                   <span
                     className={`am-board-card-state ${agent.closed ? "closed" : stage}`}
                   >

@@ -133,6 +133,12 @@ async function setup(
   state.driverAuth = {};
   state.driverReady = {};
   state.preparation = null;
+  state.copilot = false;
+  // Invented entries; null makes the VM's Codex fail to list its models.
+  state.codexModels = [
+    { id: "sample-pro", name: "Sample Pro" },
+    { id: "sample-mini", name: "Sample Mini" },
+  ];
   const rulesDoc = (text) => {
     const lines = text.replace(/\n$/, "").split("\n");
     const blocks = [];
@@ -329,6 +335,13 @@ async function setup(
             ],
           },
         });
+      if (path === "/codex/models")
+        return state.codexModels
+          ? route.fulfill({ json: { models: state.codexModels } })
+          : route.fulfill({
+              status: 400,
+              json: { error: "MicroVM: codex timed out" },
+            });
       if (path === "/project" && request.method() === "POST") {
         state.project = {
           vmId,
@@ -352,6 +365,7 @@ async function setup(
           ),
           cwd: "/workspace/firecrab/project",
           model: body.model,
+          effort: body.effort,
         };
         state.agents.push(agent);
         return route.fulfill({ json: agent });
@@ -400,6 +414,9 @@ async function setup(
                 authenticated: state.driverAuth.claude ?? state.authenticated,
               },
               { id: "gemini", name: "Gemini CLI", available: false },
+              ...(state.copilot
+                ? [{ id: "copilot", name: "GitHub Copilot", available: true }]
+                : []),
             ],
             agents: state.agents,
           },
@@ -651,12 +668,12 @@ test("work calls an agent only when a task is submitted", async (t) => {
     dialog.getByRole("button", { name: "Start task", exact: true }),
   ).toBeDisabled();
   assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
+  const model = dialog.getByRole("combobox", { name: "Model", exact: true });
+  await expect(model).toBeEnabled();
+  await model.selectOption({ label: "Other…" });
   await dialog
-    .locator("summary")
-    .filter({ hasText: /^Model$/ })
-    .click();
-  await expect(dialog.getByLabel("Model", { exact: true })).toBeEnabled();
-  await dialog.getByLabel("Model", { exact: true }).fill("temporary-model");
+    .getByRole("textbox", { name: "Model name", exact: true })
+    .fill("temporary-model");
   await page
     .locator(".am-quick-sidebar")
     .getByRole("button", { name: "Connect accounts", exact: true })
@@ -690,6 +707,7 @@ test("work calls an agent only when a task is submitted", async (t) => {
       input: "Review authentication changes",
       cli: "codex",
       model: "temporary-model",
+      effort: "",
     },
   );
 });
@@ -2165,6 +2183,230 @@ test("a board task can call Claude without changing the VM's selected Codex envi
   assert.equal(calls.length, 1);
   assert.equal(calls[0].path, "/tasks");
   assert.equal(calls[0].body.cli, "claude");
+});
+
+for (const locale of ["en", "ko"])
+  test(`each task shows the model and reasoning effort it runs with in ${locale}`, async (t) => {
+    const { page, state } = await setup(t, { locale, view: "board" });
+    const ko = locale === "ko";
+    // Sessions that name neither value run on the CLI's own defaults.
+    const unknown = ko ? "기본값 · 기본값" : "default · default";
+    const board = page.getByRole("region", {
+      name: ko ? "작업 보드" : "Task board",
+      exact: true,
+    });
+    await expect(
+      board.locator('[data-task-id="builder"] .am-board-card-model'),
+    ).toHaveText(unknown);
+    await page
+      .getByRole("button", { name: ko ? "새 작업" : "New task", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog", {
+      name: ko ? "새 작업" : "New task",
+      exact: true,
+    });
+    const effort = dialog.getByRole("combobox", {
+      name: ko ? "추론 강도" : "Effort",
+      exact: true,
+    });
+    await expect(effort).toHaveValue("");
+    assert.deepEqual(
+      await effort
+        .locator("option")
+        .evaluateAll((options) => options.map((option) => option.value)),
+      ["", "low", "medium", "high", "xhigh", "max"],
+    );
+    await dialog
+      .getByRole("combobox", { name: ko ? "모델" : "Model", exact: true })
+      .selectOption("sample-mini");
+    await effort.selectOption("high");
+    await dialog
+      .getByRole("textbox", { name: ko ? "작업" : "Task", exact: true })
+      .fill("Tune the cache");
+    await dialog
+      .getByRole("button", {
+        name: ko ? "작업 시작" : "Start task",
+        exact: true,
+      })
+      .click();
+    const card = board.getByRole("button", { name: /Tune the cache/ });
+    await expect(card.locator(".am-board-card-model")).toHaveText(
+      "sample-mini · high",
+    );
+    const call = state.calls.find((c) => c.method === "POST");
+    assert.equal(call.path, "/tasks");
+    assert.equal(call.body.model, "sample-mini");
+    assert.equal(call.body.effort, "high");
+    await card.click();
+    await expect(
+      page
+        .getByRole("region", { name: "Tune the cache", exact: true })
+        .locator(".am-pane-heading-copy > span"),
+    ).toHaveText("Codex · sample-mini · high");
+    const row = (name) =>
+      page
+        .locator(".am-agent-list .am-agent")
+        .filter({ hasText: name })
+        .locator(".am-agent-model");
+    await expect(row("Tune the cache")).toHaveText("sample-mini · high");
+    await expect(row("Builder")).toHaveText(unknown);
+  });
+
+const optionLabels = (select) =>
+  select
+    .locator("option")
+    .evaluateAll((options) => options.map((option) => option.textContent));
+async function openNewTask(page) {
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "New task", exact: true });
+  return {
+    dialog,
+    model: dialog.getByRole("combobox", { name: "Model", exact: true }),
+    effort: dialog.getByRole("combobox", { name: "Effort", exact: true }),
+    cli: (name) =>
+      dialog
+        .getByRole("radio", { name: `${name} for this task`, exact: true })
+        .check(),
+    start: async (input) => {
+      await dialog
+        .getByRole("textbox", { name: "Task", exact: true })
+        .fill(input);
+      await dialog
+        .getByRole("button", { name: "Start task", exact: true })
+        .click();
+      await expect(dialog).toHaveCount(0);
+    },
+  };
+}
+const taskRequest = (state) => {
+  const call = state.calls.find((c) => c.method === "POST");
+  assert.equal(call.path, "/tasks");
+  const { cli, model, effort } = call.body;
+  return { cli, model, effort };
+};
+
+test("New task offers each CLI's own models and efforts without opening anything", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  const { dialog, model, effort, cli, start } = await openNewTask(page);
+  await expect(model).toBeVisible();
+  await expect(effort).toBeVisible();
+  await expect(dialog.locator("details")).toHaveCount(0);
+  // Codex lists what the VM's own Codex offers.
+  await expect
+    .poll(() => optionLabels(model))
+    .toEqual(["CLI default", "Sample Pro", "Sample Mini", "Other…"]);
+  assert.deepEqual(await optionLabels(effort), [
+    "CLI default",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ]);
+  assert.equal(state.calls.filter((c) => c.path === "/codex/models").length, 1);
+  await model.selectOption("sample-mini");
+  await effort.selectOption("high");
+  await cli("Claude Code");
+  await expect(model).toHaveValue("");
+  await expect(effort).toHaveValue("");
+  assert.deepEqual(await optionLabels(model), [
+    "CLI default",
+    "fable",
+    "opus",
+    "sonnet",
+    "Other…",
+  ]);
+  const typed = dialog.getByRole("textbox", {
+    name: "Model name",
+    exact: true,
+  });
+  await expect(typed).toHaveCount(0);
+  await model.selectOption({ label: "Other…" });
+  await typed.fill("claude-sample-2");
+  // A new CLI starts again from its defaults, typed names included.
+  await cli("Codex");
+  await expect(model).toHaveValue("");
+  await expect(typed).toHaveCount(0);
+  await cli("Claude Code");
+  await model.selectOption({ label: "Other…" });
+  await typed.fill("claude-sample-2");
+  await effort.selectOption("max");
+  await start("Write the release notes");
+  assert.deepEqual(taskRequest(state), {
+    cli: "claude",
+    model: "claude-sample-2",
+    effort: "max",
+  });
+});
+
+test("New task turns model and effort off for a CLI that has neither", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  state.copilot = true;
+  const { model, effort, cli, start } = await openNewTask(page);
+  await effort.selectOption("low");
+  await cli("GitHub Copilot");
+  for (const select of [model, effort]) {
+    await expect(select).toBeDisabled();
+    await expect(select).toHaveValue("");
+    await expect(select).toHaveAccessibleDescription(
+      "Model and effort choices work only with Codex and Claude Code.",
+    );
+  }
+  await start("Summarize open issues");
+  assert.deepEqual(taskRequest(state), {
+    cli: "copilot",
+    model: "",
+    effort: "",
+  });
+});
+
+test("New task still takes a typed model when the VM's Codex cannot list its models", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  state.codexModels = null;
+  const { dialog, model, start } = await openNewTask(page);
+  await expect
+    .poll(() => state.calls.some((c) => c.path === "/codex/models"))
+    .toBe(true);
+  await expect
+    .poll(() => optionLabels(model))
+    .toEqual(["CLI default", "Other…"]);
+  await model.selectOption({ label: "Other…" });
+  await dialog
+    .getByRole("textbox", { name: "Model name", exact: true })
+    .fill("codex-sample-9");
+  await start("Profile the build");
+  assert.deepEqual(taskRequest(state), {
+    cli: "codex",
+    model: "codex-sample-9",
+    effort: "",
+  });
+});
+
+test("the first task form offers the same choices and resets them with the VM's CLI", async (t) => {
+  const { page, state } = await setup(t, { empty: true });
+  const form = page.locator(".am-inline-task");
+  const model = form.getByRole("combobox", { name: "Model", exact: true });
+  const effort = form.getByRole("combobox", { name: "Effort", exact: true });
+  await model.selectOption("sample-pro");
+  await effort.selectOption("medium");
+  // Without a VM-wide CLI choice, the VM's CLI changes when Codex signs out
+  // and Claude Code stays signed in.
+  state.driverAuth = { codex: false, claude: true };
+  await expect(model.locator('option[value="opus"]')).toHaveCount(1);
+  await expect(model).toHaveValue("");
+  await expect(effort).toHaveValue("");
+  await model.selectOption("opus");
+  await effort.selectOption("low");
+  await form
+    .getByRole("textbox", { name: "Task", exact: true })
+    .fill("Add a health check");
+  await form.getByRole("button", { name: "Start task", exact: true }).click();
+  await expect(form).toHaveCount(0);
+  assert.deepEqual(taskRequest(state), {
+    cli: "claude",
+    model: "opus",
+    effort: "low",
+  });
 });
 
 test("a disconnected board marks its last observation and recovers without starting work", async (t) => {

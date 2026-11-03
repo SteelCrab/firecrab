@@ -131,6 +131,7 @@ async fn vm_agent_operations_reject_damaged_private_identity_without_falling_bac
                     branch: String::new(),
                     cli: "codex".into(),
                     model: String::new(),
+                    effort: String::new(),
                 }),
             )
             .boxed(),
@@ -142,6 +143,10 @@ async fn vm_agent_operations_reject_damaged_private_identity_without_falling_bac
         (
             "repositories",
             vm_github_repositories(state(), RoutePath(vm)).boxed(),
+        ),
+        (
+            "Codex models",
+            vm_codex_models(state(), RoutePath(vm)).boxed(),
         ),
         (
             "project",
@@ -354,6 +359,19 @@ async fn response(app: Router, request: Request<Body>) -> (StatusCode, HeaderMap
     let body = serde_json::from_slice(&bytes)
         .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into()));
     (status, headers, body)
+}
+
+#[tokio::test]
+async fn the_codex_model_catalog_route_reaches_the_selected_vm() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = router_for(dir.path().into(), resource::tests::platform());
+    let path = format!(
+        "/api/service/agents/microvms/{}/codex/models",
+        uuid::Uuid::new_v4()
+    );
+    let (status, _, body) = response(app, request("GET", &path, None, "")).await;
+    // No MicroVM runs here, so the VM connection, not a missing route, answers.
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
 
 #[tokio::test]

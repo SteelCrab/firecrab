@@ -71,6 +71,7 @@ fn real_disposable_editor_install_and_forward() {
                 kind: "codex".into(),
                 cwd: cwd.clone(),
                 model: String::new(),
+                effort: String::new(),
                 workspace_id: String::new(),
                 pane_id: String::new(),
                 terminal_id: String::new(),

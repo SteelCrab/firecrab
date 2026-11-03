@@ -32,6 +32,7 @@ fn real_herdr_terminal_transport() {
         kind: "terminal".into(),
         cwd: cwd.into(),
         model: String::new(),
+        effort: String::new(),
         workspace_id: pane["workspace_id"].as_str().unwrap().into(),
         pane_id: pane["pane_id"].as_str().unwrap().into(),
         terminal_id: pane["terminal_id"].as_str().unwrap().into(),

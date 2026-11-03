@@ -1,7 +1,130 @@
-import type { FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { useI18n } from "../i18n";
-import type { AgentTask, AgentStatus } from "../api/agents";
+import {
+  agentEfforts,
+  agentRequest,
+  claudeModels,
+  type AgentModel,
+  type AgentTask,
+  type AgentStatus,
+} from "../api/agents";
 import AgentBrandIcon from "./icons/AgentBrandIcon";
+
+// The select's value while a typed name is in use. Never a model name:
+// catalog names carry no control characters.
+const OTHER = "\u0000other";
+
+/** The VM's own Codex catalog: null until it answers, empty when it cannot. */
+function useCodexModels(vmId: string, wanted: boolean) {
+  const [catalog, setCatalog] = useState<{
+    vmId: string;
+    models: AgentModel[];
+  }>();
+  useEffect(() => {
+    if (!wanted || !vmId) return;
+    let live = true;
+    void agentRequest<{ models: AgentModel[] }>(
+      "/codex/models",
+      undefined,
+      undefined,
+      vmId,
+    ).then(
+      (result) => live && setCatalog({ vmId, models: result.models }),
+      () => live && setCatalog({ vmId, models: [] }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [vmId, wanted]);
+  return catalog?.vmId === vmId ? catalog.models : null;
+}
+
+/** Keyed by CLI, so a new CLI starts again from its defaults. `models` is null while loading. */
+function ModelEffortChoice({
+  draft,
+  models,
+  onChange,
+}: {
+  draft: AgentTask;
+  models: AgentModel[] | null;
+  onChange: (value: AgentTask) => void;
+}) {
+  const { t } = useI18n();
+  const note = useId();
+  const [typing, setTyping] = useState(false);
+  const supported = ["codex", "claude"].includes(draft.cli);
+  const custom =
+    typing || (!!draft.model && !models?.some((m) => m.id === draft.model));
+  const described = supported ? undefined : note;
+  return (
+    <div className="am-task-options">
+      <label>
+        {t("Model", "모델")}
+        <select
+          disabled={!supported}
+          aria-describedby={described}
+          value={custom ? OTHER : draft.model}
+          onChange={(e) => {
+            const other = e.target.value === OTHER;
+            setTyping(other);
+            onChange({ ...draft, model: other ? "" : e.target.value });
+          }}
+        >
+          <option value="">{t("CLI default", "CLI 기본값")}</option>
+          {models?.map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.name}
+            </option>
+          ))}
+          {!models && (
+            <option disabled>
+              {t("Loading models…", "모델 목록을 불러오는 중…")}
+            </option>
+          )}
+          <option value={OTHER}>{t("Other…", "직접 입력")}</option>
+        </select>
+      </label>
+      <label>
+        {t("Effort", "추론 강도")}
+        <select
+          disabled={!supported}
+          aria-describedby={described}
+          value={draft.effort}
+          onChange={(e) => onChange({ ...draft, effort: e.target.value })}
+        >
+          <option value="">{t("CLI default", "CLI 기본값")}</option>
+          {agentEfforts.map((effort) => (
+            <option key={effort} value={effort}>
+              {effort}
+            </option>
+          ))}
+        </select>
+      </label>
+      {custom && (
+        <label className="am-task-model-name">
+          {t("Model name", "모델 이름")}
+          <input
+            autoFocus={typing}
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            maxLength={128}
+            value={draft.model}
+            onChange={(e) => onChange({ ...draft, model: e.target.value })}
+          />
+        </label>
+      )}
+      {!supported && (
+        <small id={note}>
+          {t(
+            "Model and effort choices work only with Codex and Claude Code.",
+            "모델과 추론 강도는 Codex와 Claude Code에서만 고를 수 있어요.",
+          )}
+        </small>
+      )}
+    </div>
+  );
+}
 
 export default function AgentTaskForm({
   draft,
@@ -12,6 +135,7 @@ export default function AgentTaskForm({
   canControl,
   drivers,
   error,
+  vmId,
   inline = false,
 }: {
   draft: AgentTask;
@@ -22,9 +146,17 @@ export default function AgentTaskForm({
   canControl: boolean;
   drivers: AgentStatus["drivers"];
   error: string;
+  vmId: string;
   inline?: boolean;
 }) {
   const { t } = useI18n();
+  const codexModels = useCodexModels(vmId, draft.cli === "codex");
+  const models =
+    draft.cli === "codex"
+      ? codexModels
+      : draft.cli === "claude"
+        ? claudeModels
+        : [];
   return (
     <form
       className={`am-create am-task-create${inline ? " am-inline-task" : ""}`}
@@ -87,7 +219,12 @@ export default function AgentTaskForm({
                         !driver.available || driver.authenticated === false
                       }
                       onChange={() =>
-                        onChange({ ...draft, cli: driver.id, model: "" })
+                        onChange({
+                          ...draft,
+                          cli: driver.id,
+                          model: "",
+                          effort: "",
+                        })
                       }
                     />
                     <AgentBrandIcon kind={driver.id} />
@@ -97,18 +234,12 @@ export default function AgentTaskForm({
             </div>
           </fieldset>
         )}
-        <details className="am-task-settings">
-          <summary>{t("Model", "모델")}</summary>
-          <label className="am-task-model-field">
-            {t("Model", "모델")}
-            <input
-              disabled={!["codex", "claude"].includes(draft.cli)}
-              placeholder={t("CLI default model", "CLI 기본 모델")}
-              value={draft.model}
-              onChange={(e) => onChange({ ...draft, model: e.target.value })}
-            />
-          </label>
-        </details>
+        <ModelEffortChoice
+          key={draft.cli}
+          draft={draft}
+          models={models}
+          onChange={onChange}
+        />
         <p className="am-host-note">
           {t(
             "The CLI uses the account connected inside the selected MicroVM. Provider usage may incur charges.",

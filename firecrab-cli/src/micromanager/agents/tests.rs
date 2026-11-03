@@ -37,6 +37,7 @@ fn input(root: &Path, id: Uuid) -> Create {
         kind: "codex".into(),
         cwd: root.to_string_lossy().into(),
         model: "test-model".into(),
+        effort: String::new(),
         prompt: String::new(),
         source_digest: String::new(),
     }
@@ -188,6 +189,7 @@ fn a_task_calls_the_cli_only_after_nonempty_work_is_submitted() {
         repository: String::new(),
         branch: String::new(),
         model: String::new(),
+        effort: String::new(),
     };
     assert!(runtime.start_task(task("   ")).is_err());
     runtime.status().unwrap();
@@ -311,6 +313,7 @@ fn microvm_tasks_never_use_host_directories_or_implicit_cli_selection() {
         branch: "main".into(),
         cli: cli.into(),
         model: String::new(),
+        effort: String::new(),
     };
     assert!(runtime.start_task(request("example/project", "")).is_err());
     assert!(!root.path().join("remote-calls.jsonl").exists());
@@ -344,6 +347,71 @@ fn microvm_tasks_never_use_host_directories_or_implicit_cli_selection() {
 
 #[cfg(unix)]
 #[test]
+fn a_task_records_the_model_and_effort_it_starts_with() {
+    let (root, mut runtime) = guest_fixture(true);
+    let guest = runtime.guest.as_mut().unwrap();
+    guest.available.insert("claude".into());
+    guest.authenticated.insert("claude".into());
+    shell_replies(
+        root.path(),
+        json!({
+            "/root/.codex/config.toml": {"out": "model = \"gpt-6.1-sol\"\nmodel_reasoning_effort = \"xhigh\"\n[profiles.fast]\nmodel = \"other\"\n"},
+            "/root/.claude/settings.json": {"out": "{\"model\":\"opus\",\"effortLevel\":\"medium\"}"},
+        }),
+    );
+    let task = |cli: &str, model: &str, effort: &str| TaskStart {
+        id: Uuid::new_v4(),
+        input: "Tune the cache".into(),
+        cwd: String::new(),
+        repository: String::new(),
+        branch: String::new(),
+        cli: cli.into(),
+        model: model.into(),
+        effort: effort.into(),
+    };
+    let start = |cli, model, effort| {
+        let value = runtime.start_task(task(cli, model, effort)).unwrap();
+        let calls = fs::read_to_string(root.path().join("remote-calls.jsonl")).unwrap();
+        let launch = calls
+            .lines()
+            .rfind(|l| l.contains("'agent' 'start'"))
+            .unwrap()
+            .to_owned();
+        (
+            value["model"].as_str().unwrap().to_owned(),
+            value["effort"].as_str().unwrap().to_owned(),
+            launch,
+        )
+    };
+    // CLI defaults come from the VM's own settings and are not repeated as flags.
+    let (model, effort, launch) = start("codex", "", "");
+    assert_eq!((model.as_str(), effort.as_str()), ("gpt-6.1-sol", "xhigh"));
+    assert!(!launch.contains("'--'"), "{launch}");
+    // `-m` keeps Codex on its shared background server; only `-c` leaves it.
+    let (_, _, launch) = start("codex", "sample-model", "");
+    assert!(launch.contains("'--' '-m' 'sample-model'"), "{launch}");
+    assert!(!launch.contains("'-c'"), "{launch}");
+    let (model, effort, launch) = start("codex", "gpt-5.6-luna", "high");
+    assert_eq!((model.as_str(), effort.as_str()), ("gpt-5.6-luna", "high"));
+    assert!(
+        launch.contains("'--' '-m' 'gpt-5.6-luna' '-c' 'model_reasoning_effort=high'"),
+        "{launch}"
+    );
+    let (model, effort, launch) = start("claude", "", "max");
+    assert_eq!((model.as_str(), effort.as_str()), ("opus", "max"));
+    assert!(launch.contains("'--' '--effort' 'max'"), "{launch}");
+    assert!(!launch.contains("--model"), "{launch}");
+    // Without settings the value stays unknown instead of being guessed.
+    shell_replies(root.path(), json!({}));
+    let (model, effort, _) = start("codex", "", "");
+    assert_eq!((model.as_str(), effort.as_str()), ("", ""));
+    for bad in ["ultra", "none", "high'; true"] {
+        assert!(runtime.start_task(task("codex", "", bad)).is_err(), "{bad}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn microvm_login_never_submits_the_waiting_task_to_a_model() {
     let (root, runtime) = guest_fixture(false);
     let task = TaskStart {
@@ -354,6 +422,7 @@ fn microvm_login_never_submits_the_waiting_task_to_a_model() {
         branch: String::new(),
         cli: "codex".into(),
         model: String::new(),
+        effort: String::new(),
     };
     assert!(runtime.start_task(task).is_err());
     assert!(!root.path().join("remote-calls.jsonl").exists());
@@ -405,6 +474,7 @@ fn first_run_approval_keeps_the_task_until_the_user_sends_it() {
         branch: String::new(),
         cli: "codex".into(),
         model: String::new(),
+        effort: String::new(),
     };
     let pending = runtime.start_task(task).unwrap();
     assert_eq!(pending["hasPendingTask"], true);
@@ -437,6 +507,7 @@ fn an_uncertain_prompt_delivery_is_never_automatically_replayed() {
         branch: String::new(),
         cli: "codex".into(),
         model: String::new(),
+        effort: String::new(),
     };
     let result = runtime.start_task(task).unwrap();
     assert_eq!(result["hasPendingTask"], false);
@@ -465,6 +536,7 @@ fn vm_project_is_cloned_once_and_recovered_after_native_metadata_loss() {
         branch: String::new(),
         cli: "codex".into(),
         model: String::new(),
+        effort: String::new(),
     };
     let configured = runtime
         .setup_project(project::Setup {
@@ -558,6 +630,7 @@ pub(super) fn workspace_fixture() -> (tempfile::TempDir, Runtime, Agent) {
         kind: "codex".into(),
         cwd: project::WORKSPACE.into(),
         model: String::new(),
+        effort: String::new(),
         workspace_id: "w1".into(),
         pane_id: "w1:p1".into(),
         terminal_id: "guest-terminal".into(),
@@ -595,6 +668,36 @@ fn timed_out_login_checks_keep_the_last_known_answer() {
     assert!(auth.is_empty());
     let (_, auth) = guest::parse_probe("tool:gh\n", &known);
     assert!(auth.is_empty());
+}
+
+#[test]
+fn cli_defaults_are_read_only_from_top_level_settings() {
+    let none = (String::new(), String::new());
+    assert_eq!(
+        guest::parse_cli_defaults(
+            "codex",
+            "approval_policy = \"never\"\nmodel_reasoning_effort = \"low\"\n[profiles.fast]\nmodel = \"other\"\n"
+        ),
+        (String::new(), "low".into())
+    );
+    assert_eq!(
+        guest::parse_cli_defaults(
+            "claude",
+            "{\"model\":\"sonnet\",\"effortLevel\":\"xhigh\",\"env\":{}}"
+        ),
+        ("sonnet".into(), "xhigh".into())
+    );
+    let long = format!("model = \"{}\"", "x".repeat(129));
+    for (kind, text) in [
+        ("codex", "model = "),
+        ("codex", "model = 5"),
+        ("codex", "model = \"two\\nlines\""),
+        ("codex", long.as_str()),
+        ("claude", "not json"),
+        ("gemini", "{\"model\":\"x\"}"),
+    ] {
+        assert_eq!(guest::parse_cli_defaults(kind, text), none, "{text}");
+    }
 }
 
 #[cfg(unix)]

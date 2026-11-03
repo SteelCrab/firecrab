@@ -179,6 +179,10 @@ fn router_with_registry(
                     get(vm_github_repositories).post(create_vm_github_repository),
                 )
                 .route(
+                    "/api/service/agents/microvms/{vm}/codex/models",
+                    get(vm_codex_models),
+                )
+                .route(
                     "/api/service/agents/microvms/{vm}/project",
                     post(setup_vm_project),
                 )
@@ -434,6 +438,18 @@ async fn vm_github_repositories(
     tokio::task::spawn_blocking(move || {
         super::agents::Runtime::for_vm(&controller.home, vm, true)?
             .github_repositories()
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn vm_codex_models(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .codex_models()
             .map(Json)
     })
     .await

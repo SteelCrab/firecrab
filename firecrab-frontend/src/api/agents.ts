@@ -6,7 +6,9 @@ export type AgentSession = {
   role: string;
   kind: string;
   cwd: string;
+  /** What the CLI started with; empty means unknown (the CLI's own default). */
   model: string;
+  effort?: string;
   workspaceId: string;
   paneId: string;
   closed: boolean;
@@ -59,7 +61,18 @@ export type AgentTask = {
   input: string;
   cli: string;
   model: string;
+  effort: string;
 };
+/** Reasoning efforts both Codex and Claude Code accept. */
+export const agentEfforts = ["low", "medium", "high", "xhigh", "max"];
+export type AgentModel = { id: string; name: string };
+/** The aliases `claude --help` documents for `--model`; full model names work too. */
+export const claudeModels: AgentModel[] = ["fable", "opus", "sonnet"].map(
+  (id) => ({ id, name: id }),
+);
+export function agentModelLabel(agent: AgentSession, fallback: string) {
+  return `${agent.model || fallback} · ${agent.effort || fallback}`;
+}
 export type VmRepository = {
   vmId: string;
   repository: string | null;

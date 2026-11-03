@@ -336,6 +336,17 @@ impl Guest {
         );
         Ok(())
     }
+    /// The model and reasoning effort set in the CLI's own settings, empty when unknown.
+    pub fn cli_defaults(&self, kind: &str) -> (String, String) {
+        let path = match kind {
+            "codex" => "/root/.codex/config.toml",
+            "claude" => "/root/.claude/settings.json",
+            _ => return Default::default(),
+        };
+        self.shell(&format!("cat -- {}", quote(path)), Duration::from_secs(5))
+            .map(|text| parse_cli_defaults(kind, &text))
+            .unwrap_or_default()
+    }
     pub fn workspace(&self, project: &super::project::VmProject) -> Result<String, Error> {
         use base64::{Engine, engine::general_purpose::STANDARD};
         let root = quote(&project.path);
@@ -531,6 +542,29 @@ pub(super) fn parse_probe(
     let mut authenticated: HashSet<String> = lines("auth:").collect();
     authenticated.extend(lines("auth-unknown:").filter(|name| previous.contains(name)));
     (lines("tool:").collect(), authenticated)
+}
+
+/// Top-level keys only: Codex profiles and Claude Code per-model settings are not resolved.
+pub(super) fn parse_cli_defaults(kind: &str, text: &str) -> (String, String) {
+    let (settings, effort): (Value, _) = match kind {
+        "codex" => (
+            toml::from_str(text).unwrap_or_default(),
+            "model_reasoning_effort",
+        ),
+        "claude" => (
+            serde_json::from_str(text).unwrap_or_default(),
+            "effortLevel",
+        ),
+        _ => return Default::default(),
+    };
+    let read = |key: &str| {
+        settings[key]
+            .as_str()
+            .filter(|v| v.len() <= 128 && !v.contains(char::is_control))
+            .unwrap_or_default()
+            .to_owned()
+    };
+    (read("model"), read(effort))
 }
 
 fn ssh_path(name: &str, path: &Path) -> String {

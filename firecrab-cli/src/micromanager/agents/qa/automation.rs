@@ -56,6 +56,7 @@ fn real_disposable_microvm_pipeline() {
         kind: "codex".into(),
         cwd: cwd.clone(),
         model: String::new(),
+        effort: String::new(),
         workspace_id: String::new(),
         pane_id: String::new(),
         terminal_id: String::new(),

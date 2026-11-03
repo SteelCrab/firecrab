@@ -515,15 +515,21 @@
 .am-task-folder-note {
   margin-top: -12px;
 }
-.am-task-settings {
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
-  color: var(--text-2);
-  font-size: 13px;
+.am-task-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
 }
-.am-task-settings > summary {
-  cursor: pointer;
-  min-height: 28px;
+.am-task-options > :is(.am-task-model-name, small) {
+  grid-column: 1 / -1;
+}
+.screen[data-view="ai-sandbox"]
+  .agent-manager
+  .am-task-options
+  select:disabled {
+  background: var(--bg-subtle);
+  color: var(--text-3);
+  cursor: not-allowed;
 }
 .screen[data-view="ai-sandbox"] .agent-manager .am-cli-options {
   border: 0;
@@ -616,10 +622,6 @@
 }
 .am-cli-choice small {
   display: block;
-}
-.am-task-model-field {
-  max-width: 340px;
-  margin: 12px 0;
 }
 .screen[data-view="ai-sandbox"] .agent-manager .am-create .am-host-note {
   font-size: 11px;

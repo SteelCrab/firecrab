@@ -78,6 +78,7 @@ herdr terminal session control --help >/dev/null
             kind: "codex".into(),
             cwd,
             model: String::new(),
+            effort: String::new(),
             workspace_id: created["workspace"]["workspace_id"]
                 .as_str()
                 .unwrap()

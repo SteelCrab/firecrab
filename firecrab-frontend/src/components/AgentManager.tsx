@@ -37,6 +37,7 @@ import {
   agentRequest,
   agentEditorUrl,
   AgentRequestError,
+  agentModelLabel,
   type AgentTask,
   type AgentSession,
   type AgentStatus,
@@ -84,6 +85,7 @@ const blank = (): AgentTask => ({
   input: "",
   cli: "",
   model: "",
+  effort: "",
 });
 
 export default function AgentManager(props: Props) {
@@ -252,7 +254,7 @@ function VmAgentWorkspace({
     setupDirty ||
     appDirty ||
     !!editor ||
-    !!(starter.input.trim() || starter.model);
+    !!(starter.input.trim() || starter.model || starter.effort);
   useEffect(() => {
     onUnsavedChange(dirty);
     return () => onUnsavedChange(false);
@@ -365,6 +367,13 @@ function VmAgentWorkspace({
     status?.preparation?.state !== "installing";
   const canLaunch =
     canControl && cliReady && status?.project?.state === "ready";
+  // The first-task form follows the VM's CLI. A model or effort chosen for
+  // another CLI does not carry over when that CLI changes.
+  useEffect(() => {
+    setStarter((old) =>
+      old.cli && old.cli !== cli ? { ...old, cli, model: "", effort: "" } : old,
+    );
+  }, [cli]);
   // Name the first thing that still blocks a task, not everything that could.
   // The repository comes first, as on the Connect accounts page.
   const blocker = (() => {
@@ -427,6 +436,7 @@ function VmAgentWorkspace({
           input: request.input,
           cli: chosenCli,
           model: request.model,
+          effort: request.effort,
         },
         status?.controllerId,
         vmId,
@@ -953,6 +963,7 @@ function VmAgentWorkspace({
                       canControl={canLaunch}
                       drivers={status.drivers}
                       error={createError}
+                      vmId={vmId}
                     />
                   ) : (
                     <div className="am-runtime-unavailable">
@@ -996,6 +1007,11 @@ function VmAgentWorkspace({
                           <small className="am-agent-provider">
                             {agentName(agent.kind)}
                           </small>
+                          {agent.role !== "authentication" && (
+                            <small className="am-agent-model">
+                              {agentModelLabel(agent, t("default", "기본값"))}
+                            </small>
+                          )}
                         </span>
                         <span className="am-selection-mark" aria-hidden="true">
                           {selected.includes(agent.id) && <Check />}
@@ -1065,6 +1081,7 @@ function VmAgentWorkspace({
                   canControl={canLaunch}
                   drivers={status?.drivers || []}
                   error={createError}
+                  vmId={vmId}
                 />
               </AppDialog>
             )}
@@ -1320,7 +1337,8 @@ function AgentPane({
             )}
             <span>
               {agentName(agent.kind)}
-              {agent.model ? ` · ${agent.model}` : ""}
+              {agent.role !== "authentication" &&
+                ` · ${agentModelLabel(agent, t("default", "기본값"))}`}
             </span>
           </div>
         </div>

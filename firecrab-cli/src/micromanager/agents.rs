@@ -17,6 +17,7 @@ pub mod automation;
 pub mod editor;
 pub mod github;
 mod guest;
+mod models;
 pub mod project;
 pub mod rules;
 pub mod skills;
@@ -31,6 +32,8 @@ const DRIVERS: &[(&str, &str, &str)] = &[
     ("cursor", "Cursor Agent", "agent"),
     ("github", "GitHub", "gh"),
 ];
+/// Reasoning efforts both Codex (`model_reasoning_effort`) and Claude Code (`--effort`) accept.
+const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,7 +43,11 @@ pub struct Agent {
     pub role: String,
     pub kind: String,
     pub cwd: String,
+    // Model and reasoning effort the CLI started with: the task's choice, else
+    // the VM's CLI settings. Empty when unknown.
     pub model: String,
+    #[serde(default)]
+    pub effort: String,
     pub workspace_id: String,
     pub pane_id: String,
     pub terminal_id: String,
@@ -68,6 +75,8 @@ pub struct Create {
     #[serde(default)]
     pub model: String,
     #[serde(default)]
+    pub effort: String,
+    #[serde(default)]
     pub prompt: String,
     #[serde(default)]
     pub source_digest: String,
@@ -94,6 +103,8 @@ pub struct TaskStart {
     pub cli: String,
     #[serde(default)]
     pub model: String,
+    #[serde(default)]
+    pub effort: String,
 }
 
 fn invalid(message: impl Into<String>) -> Error {
@@ -338,6 +349,7 @@ impl Runtime {
                 kind: cli.into(),
                 cwd: "/root".into(),
                 model: String::new(),
+                effort: String::new(),
                 prompt: String::new(),
                 source_digest: String::new(),
             },
@@ -705,6 +717,7 @@ impl Runtime {
             kind,
             cwd: input.cwd,
             model: input.model,
+            effort: input.effort,
             source_digest: format!(
                 "{:x}",
                 Sha256::digest(
@@ -765,6 +778,14 @@ impl Runtime {
                 "Model override is supported for Codex and Claude Code",
             ));
         }
+        if !input.effort.is_empty()
+            && (!["codex", "claude"].contains(&input.kind.as_str())
+                || !EFFORTS.contains(&input.effort.as_str()))
+        {
+            return Err(invalid(
+                "Choose low, medium, high, xhigh or max reasoning effort for Codex or Claude Code",
+            ));
+        }
         if !Path::new(&input.cwd).is_absolute() {
             return Err(invalid("Working directory must be absolute"));
         }
@@ -775,6 +796,41 @@ impl Runtime {
         };
         if self.guest.is_none() && !cwd.is_dir() {
             return Err(invalid("Select an existing absolute working directory"));
+        }
+        // Only the task's own choices become flags; the CLI applies its settings itself.
+        let mut overrides = Vec::new();
+        if !input.model.is_empty() {
+            let flag = if input.kind == "claude" {
+                "--model"
+            } else {
+                "-m"
+            };
+            overrides.extend([flag.to_owned(), input.model.clone()]);
+        }
+        if !input.effort.is_empty() {
+            overrides.extend(if input.kind == "claude" {
+                ["--effort".to_owned(), input.effort.clone()]
+            } else {
+                // Codex has no effort flag. Any `-c` makes it skip its shared
+                // background server, so only a chosen effort adds one.
+                [
+                    "-c".to_owned(),
+                    format!("model_reasoning_effort={}", input.effort),
+                ]
+            });
+        }
+        let (mut model, mut effort) = (input.model, input.effort);
+        if let Some(guest) = &self.guest
+            && !login
+            && (model.is_empty() || effort.is_empty())
+        {
+            let defaults = guest.cli_defaults(&input.kind);
+            if model.is_empty() {
+                model = defaults.0;
+            }
+            if effort.is_empty() {
+                effort = defaults.1;
+            }
         }
         self.ensure_server()?;
         let created = self.run(&[
@@ -801,7 +857,8 @@ impl Runtime {
             role: input.role.trim().into(),
             kind: input.kind,
             cwd: cwd.to_string_lossy().into_owned(),
-            model: input.model,
+            model,
+            effort,
             workspace_id: workspace,
             pane_id: pane,
             terminal_id: created["root_pane"]["terminal_id"]
@@ -834,16 +891,9 @@ impl Runtime {
             "--timeout",
             "30000",
         ];
-        if !agent.model.is_empty() {
-            args.extend([
-                "--",
-                if agent.kind == "claude" {
-                    "--model"
-                } else {
-                    "-m"
-                },
-                &agent.model,
-            ]);
+        if !overrides.is_empty() {
+            args.push("--");
+            args.extend(overrides.iter().map(String::as_str));
         }
         if login {
             let command = match agent.kind.as_str() {
