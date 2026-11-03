@@ -110,6 +110,70 @@ async function setup(
   };
   state.streams = [];
   state.keys = [];
+  state.catalog = {
+    repository: "anthropics/skills",
+    commit: "ca45fc496a3436251f191354091d557da31c15b5",
+    error: null,
+    skills: [
+      {
+        name: "webapp-testing",
+        description: "Test local web apps with Playwright.",
+        license: "apache2",
+        importable: true,
+        reason: null,
+        files: ["SKILL.md", "LICENSE.txt", "scripts/run.py"],
+        preview: "---\nname: webapp-testing\n---",
+        imported: null,
+        updateAvailable: false,
+      },
+      {
+        name: "pdf",
+        description: "Work with PDF files.",
+        license: "proprietary",
+        importable: false,
+        reason: "proprietary",
+        files: ["SKILL.md", "LICENSE.txt"],
+        preview: "---\nname: pdf\n---",
+        imported: null,
+        updateAvailable: false,
+      },
+    ],
+  };
+  state.vmSkills = {
+    enabled: [],
+    state: "applied",
+    reason: null,
+    clis: [
+      { id: "codex", name: "Codex", installed: true },
+      { id: "claude", name: "Claude Code", installed: true },
+      { id: "gemini", name: "Gemini CLI", installed: false },
+    ],
+    conflicts: [],
+  };
+  state.vmSkillsNext = "applied";
+  state.allClis = state.vmSkills.clis;
+  state.driverAuth = {};
+  const rulesDoc = (text) => {
+    const lines = text.replace(/\n$/, "").split("\n");
+    const blocks = [];
+    lines.forEach((line, i) => {
+      if (line.trim()) blocks.push({ start: i, end: i + 1 });
+    });
+    return {
+      state: "ready",
+      reason: null,
+      exists: true,
+      text,
+      digest: `d${text.length}`,
+      blocks,
+    };
+  };
+  state.rulesDoc = rulesDoc;
+  state.rules = rulesDoc(
+    "# Rules\n\n- Run tests.\n- Write English PR titles.\n",
+  );
+  state.refineError = null;
+  state.applyError = null;
   await page.routeWebSocket("**/agents/microvms/*/*/terminal?*", (socket) => {
     const url = new URL(socket.url());
     const parts = url.pathname.split("/");
@@ -164,6 +228,72 @@ async function setup(
         body,
         headers: request.headers(),
       });
+      if (endpoint.endsWith("/api/service/agents/skills"))
+        return route.fulfill({ json: state.catalog });
+      const imported = endpoint.match(/\/agents\/skills\/([^/]+)\/import$/);
+      if (imported && request.method() === "POST") {
+        const skill = state.catalog.skills.find((s) => s.name === imported[1]);
+        skill.imported = { commit: state.catalog.commit, digest: "d1" };
+        skill.updateAvailable = false;
+        return route.fulfill({ json: state.catalog });
+      }
+      if (path === "/skills") {
+        if (request.method() === "POST") {
+          const enabled = new Set(state.vmSkills.enabled);
+          if (body.enabled) enabled.add(body.name);
+          else enabled.delete(body.name);
+          state.vmSkills = { ...state.vmSkills, enabled: [...enabled] };
+        }
+        const next = state.vmSkillsNext;
+        state.vmSkills = {
+          ...state.vmSkills,
+          state: next,
+          reason:
+            next === "pending"
+              ? "Start the selected MicroVM before connecting its CLI agents."
+              : next === "failed"
+                ? "MicroVM: tar: short read"
+                : null,
+          clis: next === "pending" ? [] : state.allClis,
+        };
+        return route.fulfill({ json: state.vmSkills });
+      }
+      if (path === "/rules") return route.fulfill({ json: state.rules });
+      if (path === "/rules/refine") {
+        if (state.refineError)
+          return route.fulfill({
+            status: 400,
+            json: { error: state.refineError },
+          });
+        const lines = state.rules.text.split("\n");
+        const block =
+          body.mode === "edit" ? state.rules.blocks[body.block] : null;
+        return route.fulfill({
+          json: {
+            mode: body.mode,
+            block: body.mode === "edit" ? body.block : null,
+            before: block ? lines.slice(block.start, block.end).join("\n") : "",
+            after: body.previous
+              ? "- Always run every test before each commit."
+              : "- Always run tests before commit.",
+            cli: body.cli,
+            name: body.cli === "claude" ? "Claude Code" : "Codex",
+            model: "",
+            digest: body.digest,
+          },
+        });
+      }
+      if (path === "/rules/apply") {
+        if (state.applyError)
+          return route.fulfill({
+            status: 400,
+            json: { error: state.applyError },
+          });
+        state.rules = state.rulesDoc(
+          state.rules.text.replace("- Write English PR titles.", body.text),
+        );
+        return route.fulfill({ json: { ...state.rules, warning: null } });
+      }
       if (path === "/prepare" && request.method() === "POST") {
         state.preparing = true;
         return route.fulfill({
@@ -266,13 +396,13 @@ async function setup(
                 id: "codex",
                 name: "Codex",
                 available: state.ready,
-                authenticated: state.authenticated,
+                authenticated: state.driverAuth.codex ?? state.authenticated,
               },
               {
                 id: "claude",
                 name: "Claude Code",
                 available: state.ready,
-                authenticated: state.authenticated,
+                authenticated: state.driverAuth.claude ?? state.authenticated,
               },
               { id: "gemini", name: "Gemini CLI", available: false },
             ],
@@ -1619,7 +1749,10 @@ test("failed preparation retries keep the operation ID and install only the sele
       state: posted.length === 1 ? "failed" : "ready",
       phase: posted.length === 1 ? "image" : "complete",
       error: posted.length === 1 ? "Download unavailable" : null,
-      log: posted.length === 1 ? "Ubuntu OCI import failed: manifest unavailable" : "",
+      log:
+        posted.length === 1
+          ? "Ubuntu OCI import failed: manifest unavailable"
+          : "",
     });
   });
   const row = vm(10, { id, state: "running", name: "my-workspace" });
@@ -1840,3 +1973,300 @@ test(
       .toBe(previous + 1);
   },
 );
+
+async function openSkills(page, locale) {
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", {
+      name: locale === "ko" ? "스킬 스토어" : "Skill store",
+      exact: true,
+    })
+    .click();
+}
+
+for (const [width, locale] of [
+  [1440, "en"],
+  [390, "ko"],
+])
+  test(`skill store lists official skills and imports only allowed ones at ${width}px in ${locale}`, async (t) => {
+    const { page, state } = await setup(t, { width, locale, view: "board" });
+    await openSkills(page, locale);
+    await expect(page.getByText("anthropics/skills · ca45fc4")).toBeVisible();
+    await page.getByRole("button", { name: "pdf", exact: true }).click();
+    await expect(
+      page.getByText(
+        locale === "ko"
+          ? "독점 라이선스라서 가져올 수 없어요."
+          : "Proprietary license. Firecrab cannot copy this skill.",
+      ),
+    ).toBeVisible();
+    const importButton = page.getByRole("button", {
+      name: locale === "ko" ? "가져오기" : "Import",
+      exact: true,
+    });
+    await expect(importButton).toBeDisabled();
+    await page
+      .getByRole("button", { name: "webapp-testing", exact: true })
+      .click();
+    await expect(page.getByText("Apache 2.0")).toBeVisible();
+    await importButton.click();
+    await expect(
+      page.getByText(locale === "ko" ? "✓ 가져옴" : "✓ Imported"),
+    ).toBeVisible();
+    const imports = state.calls.filter((c) => c.endpoint.endsWith("/import"));
+    assert.equal(imports.length, 1);
+    assert.equal(
+      imports[0].endpoint,
+      "/__firecrab_resources/api/service/agents/skills/webapp-testing/import",
+    );
+    assert.equal(
+      imports[0].headers["x-firecrab-controller-id"],
+      "native-controller",
+    );
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth,
+    );
+    assert.equal(overflow, false);
+  });
+
+test("enabling a skill shows per-CLI state and pending VMs", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  state.catalog.skills[0].imported = {
+    commit: state.catalog.commit,
+    digest: "d1",
+  };
+  state.vmSkillsNext = "pending";
+  await openSkills(page, "en");
+  await page
+    .getByRole("button", { name: "webapp-testing", exact: true })
+    .click();
+  await page.getByRole("switch", { name: "Use in this workspace" }).check();
+  await expect(page.getByText("Waiting for this MicroVM")).toBeVisible();
+  const toggles = state.calls.filter(
+    (c) => c.path === "/skills" && c.method === "POST",
+  );
+  assert.deepEqual(toggles.at(-1).body, {
+    name: "webapp-testing",
+    enabled: true,
+  });
+  state.vmSkillsNext = "applied";
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByText("Codex ✓")).toBeVisible();
+  await expect(page.getByText("Claude Code ✓")).toBeVisible();
+  await expect(page.getByText("Gemini CLI · Not installed")).toBeVisible();
+  await expect(page.getByText("Applies to new agent sessions")).toBeVisible();
+  state.vmSkillsNext = "failed";
+  await page.getByRole("switch", { name: "Use in this workspace" }).uncheck();
+  await page.getByRole("switch", { name: "Use in this workspace" }).check();
+  await expect(page.getByText("MicroVM: tar: short read")).toBeVisible();
+  await expect(
+    page.getByRole("switch", { name: "Use in this workspace" }),
+  ).toBeChecked();
+});
+
+test("skill store keeps imported skills when GitHub fails", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  state.catalog = {
+    ...state.catalog,
+    commit: null,
+    error: "GitHub API rate limit reached. Try again later.",
+    skills: [
+      { ...state.catalog.skills[0], imported: { commit: "c", digest: "d" } },
+    ],
+  };
+  await openSkills(page, "en");
+  await expect(page.getByRole("alert")).toContainText(
+    "GitHub API rate limit reached. Try again later.",
+  );
+  await expect(
+    page.getByRole("button", { name: "webapp-testing", exact: true }),
+  ).toBeVisible();
+  const before = state.calls.filter((c) =>
+    c.endpoint.endsWith("/agents/skills"),
+  ).length;
+  await page.getByRole("alert").getByRole("button", { name: "Retry" }).click();
+  await expect
+    .poll(
+      () =>
+        state.calls.filter((c) => c.endpoint.endsWith("/agents/skills")).length,
+    )
+    .toBeGreaterThan(before);
+});
+
+async function openRules(page, locale = "en") {
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", {
+      name: locale === "ko" ? "AGENTS.md 규칙" : "AGENTS.md rules",
+      exact: true,
+    })
+    .click();
+}
+
+for (const [width, locale] of [
+  [1440, "en"],
+  [390, "ko"],
+])
+  test(`rules default to adding and switch to editing on click at ${width}px in ${locale}`, async (t) => {
+    const { page } = await setup(t, { width, locale, view: "board" });
+    await openRules(page, locale);
+    await expect(
+      page.getByText(
+        locale === "ko" ? "모든 에이전트에 적용" : "Applies to every agent",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByText(locale === "ko" ? "새 규칙 추가" : "New rule"),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "- Write English PR titles.", exact: true })
+      .click();
+    await expect(
+      page.getByText(locale === "ko" ? "3번째 규칙 수정 중" : "Editing rule 3"),
+    ).toBeVisible();
+    await page
+      .getByRole("button", {
+        name: locale === "ko" ? "수정 취소" : "Cancel edit",
+      })
+      .click();
+    await expect(
+      page.getByText(locale === "ko" ? "새 규칙 추가" : "New rule"),
+    ).toBeVisible();
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth,
+    );
+    assert.equal(overflow, false);
+  });
+
+test("a proposal is written only after approval and names its agent", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  await openRules(page);
+  await page.getByRole("combobox", { name: "Agent" }).selectOption("claude");
+  await page
+    .getByRole("button", { name: "- Write English PR titles.", exact: true })
+    .click();
+  await page
+    .getByRole("textbox", { name: "Rule" })
+    .fill("never commit without tests");
+  await page.getByRole("button", { name: "Refine", exact: true }).click();
+  await expect(page.locator(".arl-del")).toContainText(
+    "- Write English PR titles.",
+  );
+  await expect(page.locator(".arl-ins")).toContainText(
+    "- Always run tests before commit.",
+  );
+  await expect(page.locator(".arl-proposal")).toContainText("Claude Code");
+  const refine = state.calls.filter((c) => c.path === "/rules/refine");
+  assert.equal(refine.length, 1);
+  assert.deepEqual(
+    { ...refine[0].body },
+    {
+      mode: "edit",
+      block: 2,
+      input: "never commit without tests",
+      cli: "claude",
+      digest: state.rules.digest,
+    },
+  );
+  assert.equal(state.calls.filter((c) => c.path === "/rules/apply").length, 0);
+  await page.getByRole("button", { name: "Approve", exact: true }).click();
+  await expect(page.locator(".arl-proposal")).toHaveCount(0);
+  const apply = state.calls.filter((c) => c.path === "/rules/apply");
+  assert.equal(apply.length, 1);
+  assert.equal(apply[0].body.text, "- Always run tests before commit.");
+  assert.equal(apply[0].body.mode, "edit");
+  assert.equal(apply[0].body.block, 2);
+  await expect(
+    page.getByRole("button", {
+      name: "- Always run tests before commit.",
+      exact: true,
+    }),
+  ).toBeVisible();
+});
+
+test("discard and refine again never write", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  await openRules(page);
+  await page.getByRole("textbox", { name: "Rule" }).fill("tests first");
+  await page.getByRole("button", { name: "Refine", exact: true }).click();
+  await expect(page.locator(".arl-ins")).toContainText(
+    "- Always run tests before commit.",
+  );
+  await page.getByRole("button", { name: "Refine again", exact: true }).click();
+  await expect(page.locator(".arl-ins")).toContainText(
+    "- Always run every test before each commit.",
+  );
+  const refine = state.calls.filter((c) => c.path === "/rules/refine");
+  assert.equal(
+    refine.at(-1).body.previous,
+    "- Always run tests before commit.",
+  );
+  assert.equal(refine.at(-1).body.mode, "add");
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+  await expect(page.locator(".arl-proposal")).toHaveCount(0);
+  assert.equal(state.calls.filter((c) => c.path === "/rules/apply").length, 0);
+});
+
+test("agent picker lists only logged-in Codex and Claude Code", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  state.driverAuth = { codex: true, claude: false };
+  await openRules(page);
+  const picker = page.getByRole("combobox", { name: "Agent" });
+  await expect(picker.locator("option")).toHaveText(["Codex"]);
+  state.driverAuth = { codex: false, claude: false };
+  await page.reload();
+  await openRules(page);
+  await expect(page.getByRole("textbox", { name: "Rule" })).toHaveCount(0);
+  await expect(
+    page.locator(".arl").getByRole("button", { name: "Connect accounts" }),
+  ).toBeVisible();
+});
+
+test("rules are read-only until the repository is ready", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  state.rules = {
+    state: "unavailable",
+    reason: "Prepare the repository in Workspace first.",
+    exists: false,
+    text: "",
+    digest: "",
+    blocks: [],
+  };
+  await openRules(page);
+  await expect(
+    page.getByText("Prepare the repository in Workspace first."),
+  ).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Rule" })).toHaveCount(0);
+  await page.locator(".arl").getByRole("button", { name: "Workspace" }).click();
+  await expect(
+    page.locator(".am-quick-sidebar [aria-current=step]"),
+  ).toContainText("Workspace");
+});
+
+test("a refine failure leaves the file unchanged", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  state.refineError =
+    "The MicroVM command timed out. Check its terminal before retrying.";
+  await openRules(page);
+  await page.getByRole("textbox", { name: "Rule" }).fill("keep this text");
+  await page.getByRole("button", { name: "Refine", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "The MicroVM command timed out. Check its terminal before retrying.",
+  );
+  await expect(page.getByRole("textbox", { name: "Rule" })).toHaveValue(
+    "keep this text",
+  );
+  assert.equal(state.calls.filter((c) => c.path === "/rules/apply").length, 0);
+});
+
+test("a changed file asks for reload", async (t) => {
+  const { page, state } = await setup(t, { locale: "ko", view: "board" });
+  state.applyError = "The file changed. Reload it and refine again.";
+  await openRules(page, "ko");
+  await page.getByRole("textbox", { name: "규칙" }).fill("x");
+  await page.getByRole("button", { name: "다듬기", exact: true }).click();
+  await page.getByRole("button", { name: "승인", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "파일이 바뀌었습니다. 다시 불러온 뒤 다시 다듬어 주세요.",
+  );
+});
