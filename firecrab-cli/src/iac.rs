@@ -16,12 +16,21 @@ pub enum Command {
     #[command(hide = true)]
     NativeIdentity,
     /// Internal native metadata broker; caller must own the selected native installation.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[command(hide = true)]
     NativeBroker,
     /// Serve native ownership over authenticated Firecrab mTLS.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     NativeServe(crate::native_host::server::Options),
+    /// Internal local check; never grants managed workflow execution authority.
+    #[command(hide = true)]
+    NativeWriteAllowed,
+    /// Internal privileged installer handshake; interruption remains durably busy.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    NativeMaintenance(crate::native_host::MaintenanceOptions),
+    /// Validate an installer's exact admitted parent step without granting new authority.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    NativeMaintenanceCheck(crate::native_host::MaintenanceOptions),
     /// Read persistent endpoint identity and implemented ownership capabilities.
     Identity,
     /// List active Stack and Terraform ownership records as JSON.
@@ -78,9 +87,12 @@ pub enum Error {
 impl Command {
     pub fn is_local(&self) -> bool {
         match self {
-            Self::NativeIdentity => true,
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            Self::NativeBroker | Self::NativeServe(_) => true,
+            Self::NativeIdentity
+            | Self::NativeBroker
+            | Self::NativeServe(_)
+            | Self::NativeWriteAllowed => true,
+            #[cfg(target_os = "linux")]
+            Self::NativeMaintenance(_) | Self::NativeMaintenanceCheck(_) => true,
             _ => false,
         }
     }
@@ -89,17 +101,19 @@ impl Command {
 /// Local native administration does not depend on a selected remote API or TLS profile.
 pub fn run_local(command: Command) -> Result<(), Error> {
     match command {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
         Command::NativeBroker => {
             crate::native_host::run_metadata()?;
         }
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
         Command::NativeServe(options) => crate::native_host::server::run(options)?,
+        Command::NativeWriteAllowed => {
+            crate::native_host::require_unmanaged(&crate::native_host::selected_home()?)?
+        }
+        #[cfg(target_os = "linux")]
+        Command::NativeMaintenance(options) => crate::native_host::run_maintenance(options)?,
+        #[cfg(target_os = "linux")]
+        Command::NativeMaintenanceCheck(options) => crate::native_host::check_maintenance(options)?,
         Command::NativeIdentity => {
-            #[cfg(target_os = "linux")]
-            let root = crate::service::env::ServiceEnv::from_process_env().confdir;
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            let root = crate::micromanager::native_iac_home().map_err(std::io::Error::other)?;
+            let root = crate::native_host::selected_home()?;
             print_json(&crate::native_host::inspect(&root)?)
         }
         _ => return Err(Error::Input("expected a local native command")),
@@ -110,10 +124,15 @@ pub fn run_local(command: Command) -> Result<(), Error> {
 pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
     match command {
         Command::NativeIdentity => run_local(Command::NativeIdentity)?,
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
         Command::NativeBroker => run_local(Command::NativeBroker)?,
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
         Command::NativeServe(options) => run_local(Command::NativeServe(options))?,
+        Command::NativeWriteAllowed => run_local(Command::NativeWriteAllowed)?,
+        #[cfg(target_os = "linux")]
+        Command::NativeMaintenance(options) => run_local(Command::NativeMaintenance(options))?,
+        #[cfg(target_os = "linux")]
+        Command::NativeMaintenanceCheck(options) => {
+            run_local(Command::NativeMaintenanceCheck(options))?
+        }
         Command::NativeOperation { id } | Command::RecoverNativeOperation { id } if id.is_nil() => {
             return Err(Error::Input("operation UUID must be non-nil"));
         }

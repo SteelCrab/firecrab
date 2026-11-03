@@ -330,7 +330,7 @@ fn run(cli: Cli) -> i32 {
             }
         },
         #[cfg(target_os = "linux")]
-        Command::Service { command } => match service::run(&shell::RealCommandRunner, command) {
+        Command::Service { command } => match service::run_guarded(command) {
             Ok(()) => 0,
             Err(error) => {
                 error.report();

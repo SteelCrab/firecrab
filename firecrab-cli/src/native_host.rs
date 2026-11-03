@@ -5,18 +5,30 @@ use sha2::{Digest, Sha256};
 use std::{fs, io, path::Path};
 use uuid::Uuid;
 
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(target_os = "linux")]
+mod configuration;
+
 mod journal;
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod maintenance;
 mod metadata;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) mod server;
 
+/// Only the native launcher/process environment selects this installation.
+pub(crate) fn selected_home() -> io::Result<std::path::PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        Ok(crate::service::env::ServiceEnv::from_process_env().confdir)
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        crate::micromanager::native_iac_home().map_err(io::Error::other)
+    }
+}
+
 /// Local native broker uses the operating system's installation-file authority.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn run_metadata() -> io::Result<()> {
     use std::io::Read;
-    let home = crate::micromanager::native_iac_home().map_err(io::Error::other)?;
+    let home = selected_home()?;
     let mut bytes = Vec::new();
     std::io::stdin()
         .take(16 * 1024 + 1)
@@ -33,7 +45,6 @@ pub(crate) fn run_metadata() -> io::Result<()> {
 }
 
 /// Existing native configuration writers cannot bypass the retained owner or target reservation.
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub(crate) fn require_unmanaged(home: &Path) -> io::Result<()> {
     metadata::require_unmanaged(home)
 }
@@ -55,6 +66,11 @@ pub(crate) fn installation_guard(home: &Path) -> io::Result<Option<InstallationG
         _lock: metadata::installation_lock(home)?,
     }))
 }
+
+#[cfg(target_os = "linux")]
+pub(crate) use maintenance::{
+    Options as MaintenanceOptions, check as check_maintenance, run as run_maintenance,
+};
 
 /// Identity acquisition cannot create or reconfigure an installation.
 pub(crate) fn inspect(home: &Path) -> io::Result<Target> {
@@ -102,7 +118,7 @@ fn build(home: &Path, platform: Platform, machine: String) -> io::Result<Target>
 }
 
 #[cfg(unix)]
-/// Device and inode identify the original native directory object.
+/// Creation time prevents a later filesystem object from reusing a retired inode identity.
 fn directory_identity(path: &Path) -> io::Result<String> {
     use std::os::unix::fs::MetadataExt;
     let metadata = fs::metadata(path)?;
@@ -111,7 +127,19 @@ fn directory_identity(path: &Path) -> io::Result<String> {
             "native filesystem has no stable directory identity",
         ));
     }
-    Ok(format!("{:x}:{:x}", metadata.dev(), metadata.ino()))
+    let created = metadata
+        .created()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| invalid("native directory creation time is unavailable"))?
+        .as_nanos();
+    if created == 0 {
+        return Err(invalid("native directory creation time is unavailable"));
+    }
+    Ok(format!(
+        "{:x}:{:x}:{created:x}",
+        metadata.dev(),
+        metadata.ino()
+    ))
 }
 
 #[cfg(target_os = "windows")]
@@ -120,8 +148,8 @@ fn directory_identity(path: &Path) -> io::Result<String> {
 fn directory_identity(path: &Path) -> io::Result<String> {
     use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FileIdInfo,
-        GetFileInformationByHandleEx,
+        FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
+        FileBasicInfo, FileIdInfo, GetFileInformationByHandleEx,
     };
     let file = fs::OpenOptions::new()
         .read(true)
@@ -142,6 +170,24 @@ fn directory_identity(path: &Path) -> io::Result<String> {
     }
     // SAFETY: a successful FileIdInfo call initialized the complete FILE_ID_INFO structure.
     let info = unsafe { info.assume_init() };
+    let mut basic = std::mem::MaybeUninit::<FILE_BASIC_INFO>::uninit();
+    // SAFETY: the same live directory handle and correctly sized output remain valid.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileBasicInfo,
+            basic.as_mut_ptr().cast(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the successful FileBasicInfo call initialized this complete structure.
+    let created = unsafe { basic.assume_init() }.CreationTime;
+    if created <= 0 {
+        return Err(invalid("native directory creation time is unavailable"));
+    }
     if info.FileId.Identifier.iter().all(|byte| *byte == 0) {
         return Err(invalid(
             "native filesystem has no stable directory identity",
@@ -153,7 +199,7 @@ fn directory_identity(path: &Path) -> io::Result<String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    Ok(format!("{:x}:{id}", info.VolumeSerialNumber))
+    Ok(format!("{:x}:{id}:{created:x}", info.VolumeSerialNumber))
 }
 
 #[cfg(target_os = "linux")]

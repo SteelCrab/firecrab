@@ -51,6 +51,116 @@ fn receipt(intent: &OwnerChange) -> Receipt {
 }
 
 #[test]
+fn iac_native_facets_keep_separate_physical_realms_and_shared_address_reservations() {
+    let (directory, store, management) = fixture();
+    store.prepare_native_host_owner(management.clone()).unwrap();
+    let mut configuration = management.clone();
+    configuration.target.platform = Platform::Linux;
+    configuration.target.installation_id = Uuid::new_v4();
+    configuration.target.configuration_root = "/etc/firecrab".into();
+    configuration.target.directory_id = "2:99:1234".into();
+    configuration.change.operation_id = Uuid::new_v4();
+    configuration.change.resource.kind = "host_configuration".into();
+    configuration.change.resource.id = configuration.target.installation_id.to_string();
+    assert!(matches!(
+        store.prepare_native_host_owner(configuration.clone()),
+        Err(Error::IacResourceBusy)
+    ));
+    configuration.change.owner.as_mut().unwrap().key = "firecrab_host_configuration.guest".into();
+    store
+        .prepare_native_host_owner(configuration.clone())
+        .unwrap();
+    store
+        .check_iac_native_host("management_settings", &management.target)
+        .unwrap();
+    store
+        .check_iac_native_host("host_configuration", &configuration.target)
+        .unwrap();
+    assert!(
+        store
+            .check_iac_native_host("management_settings", &configuration.target)
+            .is_err()
+    );
+    assert!(
+        store
+            .check_iac_native_host("host_configuration", &management.target)
+            .is_err()
+    );
+    drop(store);
+    let store = Store::open(&directory.path().join("state.db")).unwrap();
+    assert_eq!(
+        store
+            .native_host_owner_intent(management.change.operation_id)
+            .unwrap(),
+        Some(management.clone())
+    );
+    assert_eq!(
+        store
+            .native_host_owner_intent(configuration.change.operation_id)
+            .unwrap(),
+        Some(configuration.clone())
+    );
+    assert_eq!(
+        store
+            .commit_native_host_owner(&management.change, receipt(&management))
+            .unwrap()
+            .generation,
+        1
+    );
+    assert_eq!(
+        store
+            .commit_native_host_owner(&configuration.change, receipt(&configuration))
+            .unwrap()
+            .generation,
+        1
+    );
+}
+
+#[test]
+fn iac_native_legacy_binding_migration_retains_original_target_and_pending_intent() {
+    let (directory, store, intent) = fixture();
+    store.prepare_native_host_owner(intent.clone()).unwrap();
+    {
+        let connection = store.lock();
+        connection
+            .execute("DELETE FROM iac_native_host_bindings", [])
+            .unwrap();
+        connection.execute_batch("CREATE TABLE iac_native_host_binding(singleton INTEGER PRIMARY KEY,identity TEXT NOT NULL) STRICT;").unwrap();
+        connection
+            .execute(
+                "INSERT INTO iac_native_host_binding VALUES(1,?1)",
+                [serde_json::to_string(&intent.target).unwrap()],
+            )
+            .unwrap();
+    }
+    drop(store);
+    let store = Store::open(&directory.path().join("state.db")).unwrap();
+    store
+        .check_iac_native_host("management_settings", &intent.target)
+        .unwrap();
+    let mut replaced = intent.target.clone();
+    replaced.directory_id = "99:42".into();
+    assert!(
+        store
+            .check_iac_native_host("management_settings", &replaced)
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .native_host_owner_intent(intent.change.operation_id)
+            .unwrap(),
+        Some(intent.clone())
+    );
+    assert_eq!(
+        store.host_owner_status(intent.change.operation_id).unwrap(),
+        (false, false)
+    );
+    assert!(iac_host::ensure_resource_idle(&store.lock(), &intent.change.resource).is_err());
+    let leaked_legacy_table:bool=store.lock().query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='iac_native_host_binding')",[],|row|row.get(0)).unwrap();
+    assert!(!leaked_legacy_table);
+}
+
+#[test]
 fn iac_native_host_original_target_and_pending_receipt_survive_database_restart() {
     let (directory, store, intent) = fixture();
     store.prepare_native_host_owner(intent.clone()).unwrap();
@@ -124,11 +234,13 @@ fn iac_native_host_cannot_retarget_or_reuse_a_guest_host_address_reservation() {
     guest.change.owner.as_mut().unwrap().key = "firecrab_ingress.host".into();
     store.prepare_host_owner(guest.clone()).unwrap();
     store.check_iac_host(&guest.host).unwrap();
-    store.check_iac_native_host(&intent.target).unwrap();
+    store
+        .check_iac_native_host("management_settings", &intent.target)
+        .unwrap();
     let mut replacement = intent.target.clone();
     replacement.directory_id = "1:43".into();
     assert!(matches!(
-        store.check_iac_native_host(&replacement),
+        store.check_iac_native_host("management_settings", &replacement),
         Err(Error::IacEndpointConflict)
     ));
     let mut other_request = intent.clone();

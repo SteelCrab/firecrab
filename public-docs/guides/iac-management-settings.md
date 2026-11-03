@@ -3,7 +3,7 @@
 This is an unmerged stage 2 prerequisite for [#548](https://github.com/SteelCrab/firecrab/issues/548).
 It transfers ownership metadata for an existing macOS or Windows management installation.
 Full planned configuration, managed execution, readiness and both IaC workflows remain required.
-The `host_configuration` adapter is still unavailable.
+Linux API/helper ownership uses the separate [host configuration broker](iac-host-configuration.md).
 
 ## Physical installation
 
@@ -13,10 +13,12 @@ It does not read the guest's platform display descriptor or start/reconfigure a 
 The installation UUID is stable for that machine and directory object.
 A copied profile, replacement directory or different machine cannot silently become the original target.
 Windows uses the containing volume and complete 128-bit file ID, including on ReFS.
+The native directory creation time prevents ordinary inode/file-ID reuse after removal.
+Filesystems without an available stable creation time are rejected explicitly.
 
 The broker owns `iac-native/ownership.json` under the locally selected management home.
 Its atomic journal retains owner generations, original operation hashes and unconfirmed reservations.
-The API keeps a separate native physical binding; it does not reuse its Linux Pipe-host binding.
+The API keeps separate physical bindings for the two native facets and its Linux Pipe host.
 Both realms share API operation IDs, Stack limits and Terraform logical-address reservations.
 
 ## Authenticated channel
@@ -78,5 +80,6 @@ Neither adoption nor release deletes a VM, resets disks or uninstalls the native
 Native filesystem/identity tests use temporary installation directories on the actual test OS.
 Transport tests perform real TLS handshakes and reject wrong client UUIDs, server UUIDs and forged endpoint fields.
 API recovery tests use actual TLS and SQLite with explicitly simulated native metadata replies.
+An API can connect to both its outer management broker and its separate Linux configuration broker.
 Those fixtures verify lost acknowledgement/restart behavior; they do not boot or resize a real VM.
-Full native runtime acceptance, host configuration, shared planning/execution/delegation and the Stack/Terraform adapters remain pending.
+Full native runtime acceptance, shared planning/execution/delegation and the Stack/Terraform adapters remain pending.

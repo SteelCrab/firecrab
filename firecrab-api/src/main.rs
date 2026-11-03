@@ -154,6 +154,9 @@ async fn run() -> Result<(), StartupError> {
     state.native_host = native_lifecycle::configured_client(&state.store)
         .map_err(StartupError::Tls)?
         .map(std::sync::Arc::new);
+    state.native_configuration = native_lifecycle::configured_configuration_client(&state.store)
+        .map_err(StartupError::Tls)?
+        .map(std::sync::Arc::new);
     // Reject a second owner before recovering any host or scheduled work.
     let scheduler_ownership = state
         .store

@@ -99,6 +99,9 @@ const DISK_PREP_CONCURRENCY: usize = 2;
 pub struct AppState {
     /// Native broker credentials are transport file references, outside manifests and SQLite.
     pub(crate) native_host: Option<Arc<firecrab_helper_protocol::native_iac::transport::Client>>,
+    /// Optional Linux service-configuration broker alongside an outer management host.
+    pub(crate) native_configuration:
+        Option<Arc<firecrab_helper_protocol::native_iac::transport::Client>>,
     /// Authenticated cluster transport and worker enrollment; journals live in SQLite.
     pub(crate) cluster: Arc<crate::cluster::Runtime>,
     /// Loopback fixture override, absent from production builds.
@@ -218,6 +221,7 @@ impl AppState {
         let runtime = RuntimeConfig::from_defaults(&storage, &network);
         Ok(AppState {
             native_host: None,
+            native_configuration: None,
             cluster: Arc::new(crate::cluster::Runtime::default()),
             #[cfg(test)]
             s3_test_origin: None,

@@ -17,7 +17,6 @@ mod host_platform;
 mod macos;
 mod managed_home;
 
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub(crate) fn managed_home_for_iac(home: &std::path::Path) -> std::io::Result<()> {
     managed_home::reject_symlink_components(home).map_err(std::io::Error::other)
 }
@@ -340,7 +339,7 @@ pub enum Command {
 }
 
 /// Lifecycle operations shared by native and container development backends.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Subcommand)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Subcommand, serde::Serialize)]
 pub enum DevCommand {
     /// Start the deployed API/helper and dashboard without rebuilding or booting the VM.
     Start,

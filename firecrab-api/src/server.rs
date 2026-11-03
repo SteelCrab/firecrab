@@ -215,6 +215,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/iac/native/identity",
             get(handlers::iac::native_identity),
         )
+        .route(
+            "/api/iac/native/host-configuration/identity",
+            get(handlers::iac::native_configuration_identity),
+        )
         .route("/api/iac/owners", get(handlers::iac::owners))
         .route(
             "/api/iac/native-operations",

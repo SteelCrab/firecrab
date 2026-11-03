@@ -894,7 +894,7 @@ impl Store {
         conn.execute_batch(stack_sources::SCHEMA_SQL)?;
         iac_owners::initialize(&conn)?;
         conn.execute_batch(iac_host::SCHEMA)?;
-        conn.execute_batch(iac_native_host::SCHEMA)?;
+        iac_native_host::initialize(&conn)?;
         iac_native_schema::initialize(&conn)?;
         conn.execute_batch(iac_database_targets::SCHEMA)?;
         conn.execute_batch(iac_database_operations::SCHEMA)?;

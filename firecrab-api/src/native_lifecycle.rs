@@ -15,15 +15,36 @@ mod tests;
 pub(crate) fn configured_client(
     store: &crate::persistence::Store,
 ) -> Result<Option<firecrab_helper_protocol::native_iac::transport::Client>, firecrab_pki::Error> {
-    let values = [
-        "FIRECRAB_NATIVE_IAC_ADDRESS",
-        "FIRECRAB_NATIVE_IAC_SERVER_NAME",
-        "FIRECRAB_NATIVE_IAC_INSTALLATION_ID",
-        "FIRECRAB_NATIVE_IAC_CERT",
-        "FIRECRAB_NATIVE_IAC_KEY",
-        "FIRECRAB_NATIVE_IAC_CA",
-    ]
-    .map(|key| std::env::var(key).ok());
+    configured_channel(store, "FIRECRAB_NATIVE_IAC_")
+}
+
+pub(crate) fn configured_configuration_client(
+    store: &crate::persistence::Store,
+) -> Result<Option<firecrab_helper_protocol::native_iac::transport::Client>, firecrab_pki::Error> {
+    configured_channel(store, "FIRECRAB_HOST_CONFIGURATION_IAC_")
+}
+
+fn configured_channel(
+    store: &crate::persistence::Store,
+    prefix: &str,
+) -> Result<Option<firecrab_helper_protocol::native_iac::transport::Client>, firecrab_pki::Error> {
+    let mut values: [Option<String>; 6] = Default::default();
+    for (slot, suffix) in values.iter_mut().zip([
+        "ADDRESS",
+        "SERVER_NAME",
+        "INSTALLATION_ID",
+        "CERT",
+        "KEY",
+        "CA",
+    ]) {
+        *slot = std::env::var_os(format!("{prefix}{suffix}"))
+            .map(|value| {
+                value.into_string().map_err(|_| {
+                    firecrab_pki::Error("native transport references must be UTF-8".into())
+                })
+            })
+            .transpose()?;
+    }
     if values.iter().all(Option::is_none) {
         return Ok(None);
     }
@@ -36,9 +57,9 @@ pub(crate) fn configured_client(
         Some(ca),
     ] = values
     else {
-        return Err(firecrab_pki::Error(
-            "set all six FIRECRAB_NATIVE_IAC transport references together".into(),
-        ));
+        return Err(firecrab_pki::Error(format!(
+            "set all six transport references for {prefix} together"
+        )));
     };
     if [&address, &name, &installation, &cert, &key, &ca]
         .iter()
@@ -71,40 +92,84 @@ pub(crate) fn configured_client(
 
 /// Discover the real outer installation without guessing an identity from the guest descriptor.
 pub(crate) async fn identity(state: &AppState, request_id: Uuid) -> Result<Reply, AppError> {
-    let reply = call(state, request_id, Request::Identity).await?;
-    let Reply::Identity { target, kinds } = &reply else {
+    let kind = if state.native_host.is_some() {
+        "management_settings"
+    } else {
+        "host_configuration"
+    };
+    identity_for(state, request_id, kind).await
+}
+
+/// Each facet keeps the original independently authenticated physical installation.
+pub(crate) async fn identity_for(
+    state: &AppState,
+    request_id: Uuid,
+    kind: &str,
+) -> Result<Reply, AppError> {
+    let mut reply = call(state, request_id, kind, Request::Identity).await?;
+    let Reply::Identity { target, kinds } = &mut reply else {
         return Err(AppError::internal(request_id));
     };
     if target.validate().is_err()
+        || kinds.is_empty()
+        || kinds.len() > 2
         || kinds
             .iter()
             .any(|kind| !firecrab_helper_protocol::native_iac::native_kind(kind))
     {
         return Err(AppError::internal(request_id));
     }
-    let store = state.store.clone();
+    if state.native_configuration.is_some() {
+        kinds.retain(|available| {
+            if kind == "host_configuration" {
+                available == "host_configuration"
+            } else {
+                available == "management_settings"
+            }
+        });
+    }
+    kinds.sort();
+    kinds.dedup();
+    let kinds = kinds.clone();
     let target = target.clone();
-    database(request_id, move || store.check_iac_native_host(&target)).await?;
+    let store = state.store.clone();
+    database(request_id, move || {
+        for kind in kinds {
+            store.check_iac_native_host(&kind, &target)?;
+        }
+        Ok(())
+    })
+    .await?;
     Ok(reply)
 }
 
 /// A helper outage must never fall back to an API-local ownership observation.
-async fn call(state: &AppState, request_id: Uuid, request: Request) -> Result<Reply, AppError> {
-    state
-        .native_host
-        .as_ref()
-        .ok_or_else(|| {
-            AppError::unavailable("native installation broker is not configured", request_id)
-        })?
-        .call(request)
-        .await
-        .map_err(|error| {
-            tracing::warn!(%request_id, %error, "native installation ownership broker unavailable");
-            AppError::unavailable(
-                "native installation ownership broker is unavailable; retry the original operation",
-                request_id,
-            )
-        })
+async fn call(
+    state: &AppState,
+    request_id: Uuid,
+    kind: &str,
+    request: Request,
+) -> Result<Reply, AppError> {
+    (if kind == "host_configuration" {
+        state
+            .native_configuration
+            .as_ref()
+            .or(state.native_host.as_ref())
+    } else {
+        state.native_host.as_ref()
+    })
+    .ok_or_else(|| {
+        AppError::unavailable("native installation broker is not configured", request_id)
+    })?
+    .call(request)
+    .await
+    .map_err(|error| {
+        tracing::warn!(%request_id, %error, "native installation ownership broker unavailable");
+        AppError::unavailable(
+            "native installation ownership broker is unavailable; retry the original operation",
+            request_id,
+        )
+    })
 }
 
 /// Obtain the authoritative physical target and reject helper replacement after the first admission.
@@ -138,6 +203,7 @@ pub(crate) async fn observe(
     let Reply::Observation { observation } = call(
         state,
         request_id,
+        &resource.kind,
         Request::Observe {
             endpoint_id,
             resource: resource.clone(),
@@ -156,7 +222,11 @@ pub(crate) async fn observe(
     }
     let store = state.store.clone();
     let host = observation.target.clone();
-    database(request_id, move || store.check_iac_native_host(&host)).await?;
+    let kind = resource.kind.clone();
+    database(request_id, move || {
+        store.check_iac_native_host(&kind, &host)
+    })
+    .await?;
     Ok(observation)
 }
 
@@ -204,9 +274,11 @@ pub(crate) async fn change(
     let prepare = intent.clone();
     let intent = database(request_id, move || store.prepare_native_host_owner(prepare)).await?;
     let endpoint_id = intent.change.expected_endpoint_id;
+    let kind = intent.change.resource.kind.clone();
     let reply = call(
         &state,
         request_id,
+        &kind,
         Request::ChangeOwner {
             request: Box::new(intent.clone()),
         },
@@ -236,6 +308,7 @@ pub(crate) async fn change(
     } = call(
         &state,
         request_id,
+        &kind,
         Request::ConfirmOwner {
             endpoint_id,
             operation_id: operation,

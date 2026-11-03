@@ -45,22 +45,33 @@ pub async fn identity(
         .map(|kind| (*kind).to_owned())
         .collect::<Vec<_>>();
     let mut native_target = None;
-    if state.native_host.is_some() {
-        match crate::native_lifecycle::identity(&state, request.0).await {
-            Ok(firecrab_helper_protocol::native_iac::Reply::Identity {
-                target,
-                kinds: native_kinds,
-            }) => {
-                kinds.extend(native_kinds);
-                native_target = Some(target);
-            }
-            Ok(_) => return Err(AppError::internal(request.0)),
-            Err(error) => return Err(error),
+    let mut native_targets = Vec::new();
+    for (kind, configured) in [
+        ("management_settings", state.native_host.is_some()),
+        ("host_configuration", state.native_configuration.is_some()),
+    ] {
+        if !configured {
+            continue;
         }
+        let firecrab_helper_protocol::native_iac::Reply::Identity {
+            target,
+            kinds: native_kinds,
+        } = crate::native_lifecycle::identity_for(&state, request.0, kind).await?
+        else {
+            return Err(AppError::internal(request.0));
+        };
+        if native_kinds.is_empty() {
+            continue;
+        }
+        kinds.extend(native_kinds.clone());
+        if native_target.is_none() {
+            native_target = Some(target.clone());
+        }
+        native_targets.push(serde_json::json!({"target":target,"kinds":native_kinds}));
     }
     Ok(Json(
         serde_json::json!({"endpointId":id,"inventoryKinds":firecrab_stack::resource_kinds(),
-        "transferKinds":kinds,"nativeTarget":native_target}),
+        "transferKinds":kinds,"nativeTarget":native_target,"nativeTargets":native_targets}),
     ))
 }
 
@@ -82,6 +93,23 @@ pub async fn native_identity(
     crate::native_lifecycle::identity(&state, request.0)
         .await
         .map(Json)
+}
+
+/// Discover the Linux service-configuration realm independently of an outer management VM.
+pub async fn native_configuration_identity(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+) -> Result<Json<firecrab_helper_protocol::native_iac::Reply>, AppError> {
+    let reply =
+        crate::native_lifecycle::identity_for(&state, request.0, "host_configuration").await?;
+    if !matches!(&reply,firecrab_helper_protocol::native_iac::Reply::Identity {kinds,..} if kinds.iter().any(|kind|kind=="host_configuration"))
+    {
+        return Err(AppError::unavailable(
+            "selected broker does not implement native host configuration",
+            request.0,
+        ));
+    }
+    Ok(Json(reply))
 }
 
 /// A free owner slot does not assert that the corresponding resource exists.

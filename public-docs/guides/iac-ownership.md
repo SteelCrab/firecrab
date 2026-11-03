@@ -19,7 +19,7 @@ Git source identity is its exact Stack registration UUID; active checks and appl
 Configuration writes check ownership in the same SQLite transaction. Controller observations remain available.
 See [safe source removal](iac-source-removal.md) for retained generations and retryable disconnection without destroying infrastructure.
 Other inventory kinds return `unsupported_iac_resource` until their validation/activity adapter exists.
-Ownership metadata does not implement the Terraform provider. Native management settings require a reachable [authenticated native broker](iac-management-settings.md).
+Ownership metadata does not implement the Terraform provider. [Native settings](iac-management-settings.md) and [Linux host configuration](iac-host-configuration.md) require their authenticated brokers.
 The Stack dashboard lists Terraform-owned resources and their ownership generation.
 Each native Stack and Terraform state owner has a separate card.
 Resource sections use the existing navigation icons, readable type labels and resource counts.

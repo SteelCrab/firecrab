@@ -44,11 +44,26 @@ fn arguments(opts: &InstallOpts) -> Vec<OsString> {
     args
 }
 
-fn execute(script: &Path, args: &[OsString]) -> Result<(), Error> {
+fn execute(
+    script: &Path,
+    args: &[OsString],
+    proof: Option<&super::ownership::Proof>,
+) -> Result<(), Error> {
     // Inherit the terminal so package progress and sudo prompts stay visible.
-    let status = Command::new("bash")
-        .arg(script)
-        .args(args)
+    let mut command = Command::new("bash");
+    command.arg(script).args(args);
+    if let Some(proof) = proof {
+        command
+            .env(
+                "FIRECRAB_NATIVE_MAINTENANCE_OPERATION_ID",
+                proof.operation.to_string(),
+            )
+            .env(
+                "FIRECRAB_NATIVE_MAINTENANCE_INPUT_SHA256",
+                &proof.input_sha256,
+            );
+    }
+    let status = command
         .status()
         .map_err(|error| Error::step("install", error.to_string()))?;
     if !status.success() {
@@ -61,6 +76,15 @@ fn execute(script: &Path, args: &[OsString]) -> Result<(), Error> {
 }
 
 pub(super) fn run(opts: InstallOpts, reinstall: bool, purge: bool) -> Result<(), Error> {
+    run_with_proof(opts, reinstall, purge, None)
+}
+
+pub(super) fn run_with_proof(
+    opts: InstallOpts,
+    reinstall: bool,
+    purge: bool,
+    proof: Option<&super::ownership::Proof>,
+) -> Result<(), Error> {
     let mut temp = tempfile::NamedTempFile::new()
         .map_err(|error| Error::step("install", error.to_string()))?;
     temp.write_all(bundled_script().as_bytes())
@@ -83,9 +107,9 @@ pub(super) fn run(opts: InstallOpts, reinstall: bool, purge: bool) -> Result<(),
         if purge {
             args.push("--purge".into());
         }
-        execute(script, &args)?;
+        execute(script, &args, proof)?;
     }
-    execute(script, &arguments(&opts))
+    execute(script, &arguments(&opts), proof)
 }
 
 #[cfg(test)]

@@ -37,8 +37,12 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
   checks and transactional fences for native changes, handoffs and parent deletion.
 - Add native management-settings ownership with physical installation identity,
   existing Firecrab certificate mTLS, durable native/API reservations and original
-  operation recovery. Full native configuration lifecycle and host configuration
-  remain pending under the #548 integration hold.
+  operation recovery. Add independent Linux API/helper configuration ownership
+  and durable root maintenance leases that fence CLI and standalone installer
+  changes. Full planned lifecycle, delegation and both workflows remain pending
+  under the #548 integration hold.
+- Include the issuing CA's Authority Key Identifier in new host certificates
+  for strict X.509 client compatibility; preserve existing keys and CA material.
 - Preserve fixed-address ownership with the original registry, credential digest
   and exclusive connector pins, including after private address-record deletion.
 - Retain independent named Cloudflare connector ownership on the privileged host

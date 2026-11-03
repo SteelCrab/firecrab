@@ -147,6 +147,79 @@ fn write(home: &Path, journal: &Journal) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+pub(super) struct MaintenanceLease {
+    home: std::path::PathBuf,
+    target: Target,
+    journal: Journal,
+    request: super::maintenance::Request,
+    _locks: Vec<Lock>,
+}
+
+#[cfg(target_os = "linux")]
+impl MaintenanceLease {
+    /// EOF/drop cannot clear busy state; only explicit successful original completion can.
+    pub(super) fn complete(mut self) -> io::Result<()> {
+        if !self.home.exists() && self.request.action == super::maintenance::Action::Uninstall {
+            return Ok(());
+        }
+        if inspect(&self.home)? != self.target {
+            return Err(invalid(
+                "native maintenance installation changed before completion",
+            ));
+        }
+        self.journal
+            .finish_maintenance(&self.request)
+            .map_err(invalid)?;
+        write(&self.home, &self.journal)
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn maintenance_lease(
+    home: &Path,
+    request: super::maintenance::Request,
+) -> io::Result<Option<MaintenanceLease>> {
+    crate::micromanager::managed_home_for_iac(home)?;
+    fs::create_dir_all(home)?;
+    regular(home, true)?;
+    let target = inspect(home)?;
+    let directory = home.join("iac-native");
+    match fs::create_dir(&directory) {
+        Ok(()) => {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => regular(&directory, true)?,
+        Err(error) => return Err(error),
+    }
+    let mut locks = vec![lock(&directory.join("ownership.lock"))?];
+    locks.extend(native_locks(home)?);
+    let mut journal = read(home, &target)?;
+    if !journal.begin_maintenance(&request).map_err(invalid)? {
+        return Ok(None);
+    }
+    write(home, &journal)?;
+    Ok(Some(MaintenanceLease {
+        home: home.to_owned(),
+        target,
+        journal,
+        request,
+        _locks: locks,
+    }))
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn check_maintenance(
+    home: &Path,
+    request: &super::maintenance::Request,
+) -> io::Result<()> {
+    let target = inspect(home)?;
+    read(home, &target)?
+        .check_maintenance(request)
+        .map_err(invalid)
+}
+
 /// Native Unix rename preserves the prior complete file if committing fails.
 #[cfg(unix)]
 fn commit(file: tempfile::NamedTempFile, destination: &Path) -> io::Result<()> {
@@ -201,7 +274,10 @@ pub(super) fn require_unmanaged(home: &Path) -> io::Result<()> {
 /// The production caller supplies only the independently inspected native target.
 fn writable(home: &Path, target: &Target) -> io::Result<()> {
     let journal = read(home, target)?;
-    if journal.protected("management_settings") || journal.protected("host_configuration") {
+    if journal.protected("management_settings")
+        || journal.protected("host_configuration")
+        || journal.maintenance_busy()
+    {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "native installation is managed or awaits API ownership confirmation",
@@ -236,6 +312,7 @@ fn native_locks(home: &Path) -> io::Result<Vec<Lock>> {
 }
 
 /// Native install/uninstall keep this lock across every service and filesystem side effect.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub(super) fn installation_lock(home: &Path) -> io::Result<Lock> {
     crate::micromanager::managed_home_for_iac(home)?;
     let runtime = home.join("runtime");
@@ -248,44 +325,71 @@ pub(super) fn installation_lock(home: &Path) -> io::Result<Lock> {
 }
 
 /// Persistent native settings are read with no helper request, VM boot or service mutation.
-fn snapshot(home: &Path) -> io::Result<Snapshot> {
-    let (exists, busy, configuration_sha256) =
-        crate::micromanager::native_iac_snapshot(home).map_err(io::Error::other)?;
-    Ok(Snapshot {
-        exists,
-        busy,
-        configuration_sha256,
-    })
+fn snapshot(home: &Path, kind: &str) -> io::Result<Snapshot> {
+    #[cfg(target_os = "linux")]
+    if kind == "host_configuration" {
+        let env = crate::service::env::ServiceEnv::from_process_env();
+        let mut snapshot = super::configuration::snapshot(home, &env.unitdir)?;
+        let jobs = std::process::Command::new("systemctl")
+            .args(["list-jobs", "--plain", "--no-legend", "--no-pager"])
+            .output()?;
+        snapshot.busy = !jobs.status.success()
+            || String::from_utf8_lossy(&jobs.stdout)
+                .split_ascii_whitespace()
+                .any(|part| {
+                    crate::service::env::UNITS.contains(&part)
+                        || part == crate::service::env::LEGACY_HELPER_UNIT
+                });
+        return Ok(snapshot);
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
+    {
+        if kind != "management_settings" {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "this native facet is not available",
+            ));
+        }
+        let (exists, busy, configuration_sha256) =
+            crate::micromanager::native_iac_snapshot(home).map_err(io::Error::other)?;
+        Ok(Snapshot {
+            exists,
+            busy,
+            configuration_sha256,
+        })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", test)))]
+    {
+        let _ = (home, kind);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "native host configuration is not yet available",
+        ))
+    }
 }
 
 /// Internal handlers accept only a broker-selected native home; transports must authenticate callers.
 pub(super) fn handle(home: &Path, request: Request) -> io::Result<Reply> {
     let target = inspect(home)?;
     regular(home, true)?;
-    if !matches!(
-        target.platform,
-        firecrab_helper_protocol::native_iac::Platform::Macos
-            | firecrab_helper_protocol::native_iac::Platform::Windows
-    ) {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "native management settings require macOS or Windows",
-        ));
-    }
+    let kinds: &[&str] = match target.platform {
+        firecrab_helper_protocol::native_iac::Platform::Linux => &["host_configuration"],
+        _ => &["management_settings"],
+    };
     if let Some(resource) = resource(&request) {
         firecrab_helper_protocol::native_iac::validate_resource(resource, &target)
             .map_err(invalid)?;
-        if resource.kind != "management_settings" {
+        if !kinds.contains(&resource.kind.as_str()) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "native service configuration adapter is not available",
+                "this native installation does not implement the requested facet",
             ));
         }
     }
     if matches!(request, Request::Identity) {
         return Ok(Reply::Identity {
             target,
-            kinds: vec!["management_settings".into()],
+            kinds: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
         });
     }
     let directory = home.join("iac-native");
@@ -330,7 +434,7 @@ pub(super) fn handle(home: &Path, request: Request) -> io::Result<Reply> {
             let _locks = native_locks(home)?;
             Reply::Observation {
                 observation: journal
-                    .observe(endpoint_id, &resource, &snapshot(home)?)
+                    .observe(endpoint_id, &resource, &snapshot(home, &resource.kind)?)
                     .map_err(invalid)?,
             }
         }
@@ -350,7 +454,7 @@ pub(super) fn handle(home: &Path, request: Request) -> io::Result<Reply> {
             let snapshot = if terminal {
                 None
             } else {
-                Some(snapshot(home)?)
+                Some(snapshot(home, &request.change.resource.kind)?)
             };
             let reply = journal
                 .change(*request, snapshot.as_ref())

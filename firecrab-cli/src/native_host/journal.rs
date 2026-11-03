@@ -35,6 +35,9 @@ pub(super) struct Journal {
     owners: BTreeMap<String, ResourceOwnership>,
     /// Terminal results retain the original request, independent of later native drift.
     outcomes: BTreeMap<Uuid, Outcome>,
+    /// Interrupted native maintenance must not silently become an idle installation.
+    #[serde(default)]
+    maintenance: BTreeMap<Uuid, super::maintenance::Entry>,
 }
 
 /// Known no-effect outcomes remain scoped even before the first successful namespace binding.
@@ -59,6 +62,7 @@ impl Journal {
             endpoint: None,
             owners: BTreeMap::new(),
             outcomes: BTreeMap::new(),
+            maintenance: BTreeMap::new(),
         }
     }
 
@@ -75,6 +79,12 @@ impl Journal {
                 || owner.generation > i64::MAX as u64
             {
                 return Err("native ownership namespace is inconsistent");
+            }
+        }
+        for (id, entry) in &self.maintenance {
+            entry.request.validate()?;
+            if *id != entry.request.operation_id || self.outcomes.contains_key(id) {
+                return Err("native maintenance operation identity is inconsistent");
             }
         }
         Ok(())
@@ -117,6 +127,10 @@ impl Journal {
                 Outcome::Applied { receipt } if !receipt.confirmed && receipt.ownership.resource.kind == kind))
     }
 
+    pub(super) fn maintenance_busy(&self) -> bool {
+        self.maintenance.values().any(|entry| !entry.completed)
+    }
+
     /// Ownership observation is secret-free and creates no permission to execute native changes.
     pub(super) fn observe(
         &self,
@@ -128,7 +142,7 @@ impl Journal {
         firecrab_helper_protocol::native_iac::validate_resource(resource, &self.target)?;
         Ok(Observation { target: self.target.clone(), ownership: self.owners.get(&resource.kind).cloned()
             .unwrap_or(ResourceOwnership { endpoint_id: endpoint, resource: resource.clone(), generation: 0, owner: None }),
-            exists: snapshot.exists, busy: snapshot.busy || self.outcomes.values().any(|outcome| matches!(outcome,
+            exists: snapshot.exists, busy: snapshot.busy || self.maintenance_busy() || self.outcomes.values().any(|outcome| matches!(outcome,
                 Outcome::Applied { receipt } if !receipt.confirmed && receipt.ownership.resource == *resource)),
             configuration_sha256: snapshot.configuration_sha256.clone() })
     }
@@ -140,6 +154,9 @@ impl Journal {
         snapshot: Option<&Snapshot>,
     ) -> Result<Reply> {
         request.validate()?;
+        if self.maintenance.contains_key(&request.change.operation_id) {
+            return Err("operation UUID belongs to native maintenance");
+        }
         let hash = request
             .request_sha256()
             .map_err(|_| "invalid native request identity")?;
@@ -253,6 +270,77 @@ impl Journal {
         }
         receipt.confirmed = true;
         Ok(receipt.clone())
+    }
+
+    /// A local maintenance lease never grants permission to mutate an IaC-owned installation.
+    #[cfg(any(target_os = "linux", test))]
+    pub(super) fn begin_maintenance(
+        &mut self,
+        request: &super::maintenance::Request,
+    ) -> Result<bool> {
+        request.validate()?;
+        if let Some(entry) = self.maintenance.get(&request.operation_id) {
+            if entry.request != *request {
+                return Err("native maintenance operation belongs to another request");
+            }
+            return Ok(!entry.completed);
+        }
+        if self.outcomes.contains_key(&request.operation_id) {
+            return Err("native maintenance UUID belongs to ownership work");
+        }
+        if self.protected("management_settings")
+            || self.protected("host_configuration")
+            || self.maintenance.values().any(|entry| !entry.completed)
+        {
+            return Err("native installation is managed or has unresolved maintenance");
+        }
+        self.maintenance.insert(
+            request.operation_id,
+            super::maintenance::Entry {
+                request: request.clone(),
+                completed: false,
+            },
+        );
+        Ok(true)
+    }
+
+    /// Only explicit completion of the original request clears its durable busy state.
+    #[cfg(any(target_os = "linux", test))]
+    pub(super) fn finish_maintenance(
+        &mut self,
+        request: &super::maintenance::Request,
+    ) -> Result<()> {
+        let entry = self
+            .maintenance
+            .get_mut(&request.operation_id)
+            .ok_or("original native maintenance is unavailable")?;
+        if entry.request != *request {
+            return Err("native maintenance operation belongs to another request");
+        }
+        entry.completed = true;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn check_maintenance(&self, request: &super::maintenance::Request) -> Result<()> {
+        use super::maintenance::Action;
+        request.validate()?;
+        let entry = self
+            .maintenance
+            .get(&request.operation_id)
+            .ok_or("original native maintenance is unavailable")?;
+        let action_matches = entry.request.action == request.action
+            || (entry.request.action == Action::Reinstall
+                && matches!(request.action, Action::Install | Action::Uninstall));
+        if entry.completed
+            || entry.request.input_sha256 != request.input_sha256
+            || !action_matches
+            || self.protected("management_settings")
+            || self.protected("host_configuration")
+        {
+            return Err("native maintenance does not authorize this original installer step");
+        }
+        Ok(())
     }
 }
 

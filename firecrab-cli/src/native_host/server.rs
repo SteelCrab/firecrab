@@ -28,7 +28,7 @@ pub(crate) struct Options {
 }
 
 pub(crate) fn run(options: Options) -> io::Result<()> {
-    let home = crate::micromanager::native_iac_home().map_err(io::Error::other)?;
+    let home = super::selected_home()?;
     let target = super::inspect(&home)?;
     let server = Server::new(
         &TlsPaths {

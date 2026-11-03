@@ -331,7 +331,8 @@ def main():
                                    capture_output=True, timeout=20, check=True)
         identity = json.loads(inspected.stdout)
         assert identity["platform"] == "linux" and identity["configurationRoot"] == str(fresh.resolve())
-        assert identity["directoryId"] == f"{fresh.stat().st_dev:x}:{fresh.stat().st_ino:x}"
+        assert identity["directoryId"].startswith(f"{fresh.stat().st_dev:x}:{fresh.stat().st_ino:x}:")
+        assert int(identity["directoryId"].split(":")[2], 16) > 0
         assert uuid.UUID(identity["installationId"]).version == 8
         print(json.dumps({"kind": "privileged-host-broker-fixture", "passed": True,
                           "manifestSha256": hashlib.sha256(original).hexdigest(),

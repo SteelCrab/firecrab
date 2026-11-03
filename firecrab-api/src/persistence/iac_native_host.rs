@@ -10,10 +10,55 @@ use uuid::Uuid;
 #[path = "iac_native_host_tests.rs"]
 mod tests;
 
-pub(super) const SCHEMA: &str = "
+const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS iac_native_host_binding (
  singleton INTEGER PRIMARY KEY CHECK(singleton=1), identity TEXT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS iac_native_host_bindings (
+ kind TEXT PRIMARY KEY CHECK(kind IN ('management_settings','host_configuration')), identity TEXT NOT NULL
 ) STRICT;";
+
+/// Preserve the original realm of every legacy admitted intent, atomically.
+pub(super) fn initialize(conn: &rusqlite::Connection) -> Result<(), Error> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(SCHEMA)?;
+    let original: Option<String> = tx
+        .query_row(
+            "SELECT identity FROM iac_native_host_binding WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(original) = original {
+        let target: Target =
+            serde_json::from_str(&original).map_err(|_| Error::IacOperationIdentity)?;
+        target.validate().map_err(|_| Error::IacOperationIdentity)?;
+        let kinds=tx.prepare("SELECT DISTINCT kind FROM iac_host_owner_intents WHERE kind IN ('management_settings','host_configuration') AND json_extract(intent,'$.target')=?1")?
+            .query_map([&original],|row|row.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+        if kinds.is_empty() {
+            return Err(Error::IacOperationIdentity);
+        }
+        for kind in kinds {
+            let bound: Option<String> = tx
+                .query_row(
+                    "SELECT identity FROM iac_native_host_bindings WHERE kind=?1",
+                    [&kind],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if bound.as_ref().is_some_and(|bound| bound != &original) {
+                return Err(Error::IacEndpointConflict);
+            }
+            tx.execute(
+                "INSERT INTO iac_native_host_bindings VALUES(?1,?2) ON CONFLICT DO NOTHING",
+                params![kind, original],
+            )?;
+        }
+    }
+    tx.execute("DROP TABLE iac_native_host_binding", [])?;
+    tx.commit()?;
+    Ok(())
+}
 
 /// Construction requires this database's original durable intent and exact native result.
 pub(super) struct NativeProof {
@@ -62,13 +107,16 @@ impl Store {
     }
 
     /// The native Mac/Windows identity never replaces the API guest's bound Linux host identity.
-    pub(crate) fn check_iac_native_host(&self, target: &Target) -> Result<(), Error> {
+    pub(crate) fn check_iac_native_host(&self, kind: &str, target: &Target) -> Result<(), Error> {
+        if !firecrab_helper_protocol::native_iac::native_kind(kind) {
+            return Err(Error::UnsupportedIacResource);
+        }
         target.validate().map_err(|_| Error::InvalidIacOwner)?;
         let raw: Option<String> = self
             .lock()
             .query_row(
-                "SELECT identity FROM iac_native_host_binding WHERE singleton=1",
-                [],
+                "SELECT identity FROM iac_native_host_bindings WHERE kind=?1",
+                [kind],
                 |row| row.get(0),
             )
             .optional()?;
@@ -123,8 +171,8 @@ impl Store {
             serde_json::to_string(&intent.target).map_err(|_| Error::IacOperationIdentity)?;
         let original: Option<String> = tx
             .query_row(
-                "SELECT identity FROM iac_native_host_binding WHERE singleton=1",
-                [],
+                "SELECT identity FROM iac_native_host_bindings WHERE kind=?1",
+                [&request.resource.kind],
                 |row| row.get(0),
             )
             .optional()?;
@@ -135,8 +183,8 @@ impl Store {
             return Err(Error::IacEndpointConflict);
         }
         tx.execute(
-            "INSERT INTO iac_native_host_binding VALUES(1,?1) ON CONFLICT DO NOTHING",
-            [&identity],
+            "INSERT INTO iac_native_host_bindings VALUES(?1,?2) ON CONFLICT DO NOTHING",
+            params![request.resource.kind, identity],
         )?;
         tx.execute("INSERT INTO iac_host_owner_intents(operation_id,request_hash,intent,kind,resource_id,manager,owner_id,logical_key) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
             params![request.operation_id.to_string(),hash,serde_json::to_string(&intent).map_err(|_| Error::IacOperationIdentity)?,request.resource.kind,request.resource.id,

@@ -86,6 +86,7 @@ pub fn issue_host_cert(
     let issuer = Issuer::from_ca_cert_der(&ca, key)?;
     let now = OffsetDateTime::now_utc();
     let mut params = CertificateParams::new(names)?;
+    params.use_authority_key_identifier_extension = true;
     params
         .distinguished_name
         .push(DnType::CommonName, id.to_string());

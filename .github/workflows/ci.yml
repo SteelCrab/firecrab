@@ -37,6 +37,7 @@ jobs:
               cargo build --release --locked -p firecrab-cli
               cargo check --locked -p firecrab-helper --all-targets
               python3 scripts/test-host-iac.py /build/target/release/firecrab
+              python3 scripts/test-native-iac.py /build/target/release/firecrab
             '
   rust:
     name: Rust (fmt, clippy, test + coverage)

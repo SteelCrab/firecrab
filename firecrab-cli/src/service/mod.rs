@@ -17,6 +17,7 @@ pub mod host_state;
 mod installer;
 pub mod layout;
 pub mod output;
+mod ownership;
 pub mod payload;
 pub mod pkg;
 pub mod privileged;
@@ -25,7 +26,7 @@ pub mod uninstall;
 pub mod units;
 
 /// `firecrab service <sub>`.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Subcommand, serde::Serialize)]
 pub enum Command {
     /// Build an isolated development environment without changing host systemd services.
     #[command(args_conflicts_with_subcommands = true)]
@@ -74,7 +75,7 @@ pub enum Command {
 }
 
 /// Options shared by `install` and `reinstall`.
-#[derive(Debug, Clone, Default, Args)]
+#[derive(Debug, Clone, Default, Args, serde::Serialize)]
 pub struct InstallOpts {
     /// Release tag to install (default: latest).
     #[arg(long, value_name = "TAG")]
@@ -152,7 +153,38 @@ impl Error {
 }
 
 /// Executes one `firecrab service` command.
+pub fn run_guarded(command: Command) -> Result<(), Error> {
+    let runner = crate::shell::RealCommandRunner;
+    if matches!(&command, Command::Dev { .. })
+        || matches!(&command, Command::Reinstall { purge: true, .. })
+        || matches!(&command,Command::Install(opts)|Command::Reinstall {opts,..} if opts.check)
+    {
+        return run(&runner, command);
+    }
+    let env = env::ServiceEnv::from_process_env();
+    if matches!(
+        &command,
+        Command::Start | Command::Stop | Command::Restart | Command::Enable | Command::Disable
+    ) {
+        units::require_installed(&env)?;
+    }
+    let privileged = privileged::Privileged::detect(&runner);
+    privileged.ensure_ticket()?;
+    let guard = ownership::Guard::begin(&command, &env, &privileged)?;
+    run_with_proof(&runner, command, Some(&guard.proof()))?;
+    guard.complete()
+}
+
+/// Core service behavior is also exercised with a fake process runner.
 pub fn run(runner: &dyn CommandRunner, command: Command) -> Result<(), Error> {
+    run_with_proof(runner, command, None)
+}
+
+fn run_with_proof(
+    runner: &dyn CommandRunner,
+    command: Command,
+    proof: Option<&ownership::Proof>,
+) -> Result<(), Error> {
     #[cfg(target_os = "linux")]
     if let Command::Dev {
         command,
@@ -210,7 +242,7 @@ pub fn run(runner: &dyn CommandRunner, command: Command) -> Result<(), Error> {
             privileged.ensure_ticket()?;
             uninstall::uninstall(&privileged, &env, purge)
         }
-        Command::Install(opts) => installer::run(opts, false, false),
-        Command::Reinstall { opts, purge } => installer::run(opts, true, purge),
+        Command::Install(opts) => installer::run_with_proof(opts, false, false, proof),
+        Command::Reinstall { opts, purge } => installer::run_with_proof(opts, true, purge, proof),
     }
 }

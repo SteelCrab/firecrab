@@ -9,6 +9,39 @@ fn authority() -> (tempfile::TempDir, PathBuf) {
 }
 
 #[test]
+fn issued_host_authority_key_identifier_matches_the_existing_ca_subject_key() {
+    use x509_parser::extensions::ParsedExtension;
+    let (_root, directory) = authority();
+    let paths = issue_host_cert(&directory, Uuid::new_v4(), vec!["localhost".into()], 1).unwrap();
+    let ca_der = root_certificate(&paths.ca).unwrap();
+    let ca = parse(&ca_der).unwrap();
+    let expected = ca
+        .extensions()
+        .iter()
+        .find_map(|extension| match extension.parsed_extension() {
+            ParsedExtension::SubjectKeyIdentifier(identifier) => Some(identifier.0),
+            _ => None,
+        })
+        .expect("root CA subject key identifier");
+    let leaves = certificates(&paths.cert).unwrap();
+    let leaf = parse(&leaves[0]).unwrap();
+    let actual = leaf
+        .extensions()
+        .iter()
+        .find_map(|extension| match extension.parsed_extension() {
+            ParsedExtension::AuthorityKeyIdentifier(identifier) => identifier
+                .key_identifier
+                .as_ref()
+                .map(|identifier| identifier.0),
+            _ => None,
+        })
+        .expect("host certificate authority key identifier");
+    assert_eq!(actual, expected);
+    paths.server_config().unwrap();
+    paths.client_config().unwrap();
+}
+
+#[test]
 fn issues_matching_uuid_certificate_and_never_overwrites_keys() {
     let (_root, directory) = authority();
     let id = Uuid::new_v4();

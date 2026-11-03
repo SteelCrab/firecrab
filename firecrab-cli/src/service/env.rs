@@ -9,7 +9,7 @@ pub const LEGACY_HELPER_UNIT: &str = "firecrab-net-helper.service";
 
 /// Installation accounts and paths. Resolve `PREFIX`/`FIRECRAB_LIBDIR` using
 /// the same rules as `firecrab update`'s `resolve_layout` to match the helper's `host_layout`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ServiceEnv {
     /// Service account name (`$FIRECRAB_USER`, default `firecrab`).
     pub user: String,
