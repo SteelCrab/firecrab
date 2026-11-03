@@ -64,4 +64,6 @@ pub struct WorkspaceSetup {
     pub state: WorkspaceSetupState,
     pub phase: WorkspaceSetupPhase,
     pub error: Option<String>,
+    #[serde(default)]
+    pub log: String,
 }

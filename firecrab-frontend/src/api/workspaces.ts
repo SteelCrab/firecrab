@@ -15,6 +15,7 @@ export type WorkspaceSetup = Omit<WorkspaceRequest, "id"> & {
   state: "queued" | "running" | "ready" | "failed";
   phase: "image" | "network" | "create" | "start" | "complete";
   error: string | null;
+  log?: string;
 };
 export const workspaceDefaults = () => ({
   name: "my-workspace",

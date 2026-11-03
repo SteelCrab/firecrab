@@ -281,6 +281,13 @@ async fn restart_resumes_a_queued_job_and_image_failure_cannot_create_a_vm() {
     let (temp, state) = fixture().await;
     let input = input();
     let first = create_without_worker(&state, input.clone()).await.unwrap();
+    let mut saved = read(&state, input.id).await.unwrap();
+    saved.image_reference = Some(format!(
+        "127.0.0.1:1/library/ubuntu@sha256:{}",
+        "a".repeat(64)
+    ));
+    saved.kernel_version = Some("7.3.1".into());
+    save(&state, &saved).await.unwrap();
     let mut reopened = AppState::with_db_file(
         TemplateRegistry::from_specs(temp.path(), []).unwrap(),
         temp.path().join("workspaces.sqlite"),
@@ -289,6 +296,7 @@ async fn restart_resumes_a_queued_job_and_image_failure_cannot_create_a_vm() {
     .unwrap();
     reopened.image_packages = crate::image_install::ImageInstallTracker::disabled();
     reopened.image_installs = crate::image_install::ImageInstallTracker::disabled();
+    reopened.kernel_installs = crate::image_install::ImageInstallTracker::disabled();
     recover(&reopened).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -306,4 +314,135 @@ async fn restart_resumes_a_queued_job_and_image_failure_cannot_create_a_vm() {
     }
     assert!(reopened.vms.lock().unwrap().is_empty());
     assert!(reopened.store.list_micro_networks().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn old_failed_image_records_remain_retryable_without_changing_the_reserved_vm() {
+    let (_temp, state) = fixture().await;
+    let input = input();
+    let first = create_without_worker(&state, input.clone()).await.unwrap();
+    let saved = read(&state, input.id).await.unwrap();
+    let mut old = serde_json::to_value(saved).unwrap();
+    old.as_object_mut().unwrap().remove("image_reference");
+    old.as_object_mut().unwrap().remove("kernel_version");
+    old["progress"].as_object_mut().unwrap().remove("log");
+    old["progress"]["state"] = "failed".into();
+    old["progress"]["error"] = "workspace_image_failed: old package HTTP 404".into();
+    let restored: SavedSetup = serde_json::from_value(old).unwrap();
+    assert!(restored.image_reference.is_none());
+    assert!(restored.kernel_version.is_none());
+    assert!(restored.progress.log.is_empty());
+    save(&state, &restored).await.unwrap();
+    let retried = create_without_worker(&state, input).await.unwrap();
+    assert_eq!(retried.vm_id, first.vm_id);
+    assert_eq!(retried.state, Status::Queued);
+}
+
+#[tokio::test]
+async fn cached_oci_rootfs_uses_the_latest_host_kernel_and_pins_it_for_retries() {
+    use crate::image_install::{Architecture, ImageInstallTracker};
+    use crate::oci::{self, ImageReference};
+    use crate::templates::TemplateSpec;
+
+    let (temp, mut state) = fixture().await;
+    state.kernel_installs = ImageInstallTracker::disabled();
+    state.image_packages = ImageInstallTracker::disabled();
+    state.image_installs = ImageInstallTracker::disabled();
+    for version in ["7.2.12", "7.3.1"] {
+        oci::kernel_tests::install_fixture_kernel(temp.path(), Architecture::HOST, version).await;
+    }
+    let entries = [
+        ("7.2.12", Architecture::HOST, false),
+        ("7.3.1", Architecture::HOST, false),
+        ("7.4.0", Architecture::HOST, true),
+        ("8.0.0", Architecture::HOST.other(), false),
+    ].map(|(version, architecture, eol)| serde_json::json!({
+        "alias": format!("vmlinux-{version}"), "version": version,
+        "architecture": architecture.as_str(), "revision": 2,
+        "package": format!("kernel/{version}/r2/{}/vmlinux-{version}.tar.zst", architecture.as_str()),
+        "sha256": "a".repeat(64),
+        "image": oci::kernel::image_name(architecture, version).unwrap(),
+        "format": if architecture == Architecture::Aarch64 { "arm64-image" } else { "elf" },
+        "source": { "url": oci::kernel::source_url(version).unwrap(), "sha256": "b".repeat(64) },
+        "iseol": eol,
+    }));
+    let catalog =
+        serde_json::to_vec(&serde_json::json!({"schemaVersion":1,"kernels":entries})).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    state.kernel_installs =
+        ImageInstallTracker::with_base_url(format!("http://{}", listener.local_addr().unwrap()));
+    let router = axum::Router::new().route(
+        "/kernel/catalog.json",
+        axum::routing::get(move || {
+            let catalog = catalog.clone();
+            async move { catalog }
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let reference = format!("docker.io/library/ubuntu@sha256:{}", "a".repeat(64));
+    let original_alias =
+        oci::template_name_from_reference(&ImageReference::parse(&reference).unwrap())
+            .unwrap()
+            .alias;
+    let original_kernel = crate::kernel_manager::cache_path("7.2.12").unwrap();
+    std::fs::write(temp.path().join("oci-rootfs"), b"OCI Ubuntu rootfs").unwrap();
+    state
+        .templates
+        .register_spec(TemplateSpec {
+            alias: original_alias.clone(),
+            version: "oci-digest".into(),
+            kernel: original_kernel.clone(),
+            initrd: None,
+            rootfs: "oci-rootfs".into(),
+            boot_args: "root=/dev/vda rw".into(),
+        })
+        .unwrap();
+    let input = input();
+    let reserved = create_without_worker(&state, input.clone()).await.unwrap();
+    let mut job = read(&state, input.id).await.unwrap();
+    job.image_reference = Some(reference.clone());
+    save(&state, &job).await.unwrap();
+
+    let alias = image::prepare(&state, &mut job).await.unwrap();
+    assert_eq!(job.kernel_version.as_deref(), Some("7.3.1"));
+    server.abort();
+    let _ = server.await;
+    let prepared = state.templates.resolve_alias(&alias).unwrap();
+    assert_eq!(
+        prepared.kernel.relative_path(),
+        crate::kernel_manager::cache_path("7.3.1").unwrap()
+    );
+    assert_eq!(
+        prepared.rootfs.relative_path(),
+        std::path::Path::new("oci-rootfs")
+    );
+    assert_eq!(
+        state
+            .templates
+            .resolve_alias(&original_alias)
+            .unwrap()
+            .kernel
+            .relative_path(),
+        original_kernel
+    );
+    let count = state.templates.list_aliases().len();
+    assert_eq!(image::prepare(&state, &mut job).await.unwrap(), alias);
+    assert_eq!(state.templates.list_aliases().len(), count);
+    assert_eq!(
+        read(&state, input.id).await.unwrap().progress.vm_id,
+        reserved.vm_id
+    );
+    assert_eq!(
+        read(&state, input.id)
+            .await
+            .unwrap()
+            .image_reference
+            .as_deref(),
+        Some(reference.as_str())
+    );
+    assert!(state.vms.lock().unwrap().is_empty());
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    let Json(progress) = get(State(state), Path(input.id)).await.unwrap();
+    assert!(progress.log.contains("Linux kernel 7.3.1"));
+    assert!(!progress.log.contains("registry.firecrab.dev/ubuntu"));
 }
