@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Retain one original service deployment identity per Stack apply, including
+  initial deployments. Recover its acknowledgement before choosing a replacement
+  strategy, and reject changed inputs or a different parent authority.
+
 - Add shared AI model-default plans with exact project scope, borrowed connection
   ownership and retained credential-source generations. Fence rotation and UUID
   recreation, preserve same-account token renewal and retain apply workers after

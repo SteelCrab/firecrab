@@ -43,6 +43,194 @@ async fn fixture() -> (tempfile::TempDir, AppState, MicroServiceDeployment) {
     (root, state, deployment)
 }
 
+async fn recorded_stack_service() -> (
+    tempfile::TempDir,
+    AppState,
+    MicroServiceDeployment,
+    Uuid,
+    Uuid,
+) {
+    use firecrab_stack::{ApplyStatus, Binding, ResourceKind};
+    let (root, state, mut deployment) = fixture().await;
+    state.store.register_stack("service-replay").unwrap();
+    let registration = state
+        .store
+        .bind_stack_resource(
+            "service-replay",
+            &Binding {
+                kind: ResourceKind::Service,
+                key: "app".into(),
+                resource_id: deployment.service_id,
+            },
+        )
+        .unwrap();
+    let apply = Uuid::new_v4();
+    let network = Uuid::new_v4();
+    let status:ApplyStatus=serde_json::from_value(serde_json::json!({"operationId":apply,"stackId":registration.id,
+        "name":registration.name,"state":"queued","changes":[{"kind":"service","key":"app","resourceId":deployment.service_id,
+        "action":"deploy","fields":[],"reason":null,"state":"running"}],"error":null})).unwrap();
+    state
+        .store
+        .begin_stack_apply(&registration, "original-desired-hash", false, &status, None)
+        .unwrap();
+    deployment.id = deploy_operation_id(apply, deployment.service_id);
+    deployment.request.micro_network_id = Some(network);
+    deployment.phase = ServicePhase::Running;
+    deployment
+        .instances
+        .push(firecrab_api_types::ServiceInstance {
+            vm_id: Uuid::new_v4(),
+            ipv4: "127.0.0.1".into(),
+            host_port: 30100,
+            state: VmState::Running,
+            healthy: true,
+        });
+    state.store.save_service_deployment(&deployment).unwrap();
+    (root, state, deployment, apply, network)
+}
+
+#[tokio::test]
+async fn iac_stack_service_lost_ack_reuses_original_child_before_stop_or_deploy() {
+    let (_root, state, mut original, apply, network) = recorded_stack_service().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    original.spec.port = listener.local_addr().unwrap().port();
+    state.store.save_service_deployment(&original).unwrap();
+    let health = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().fallback(|| async { axum::http::StatusCode::OK }),
+        )
+        .await
+        .unwrap();
+    });
+    let vm_id = original.instances[0].vm_id;
+    let mut vm = vms::test_support::record("original-replica", vm_id);
+    vm.state = VmState::Running;
+    state.vms.lock().unwrap().insert(vm_id, vm);
+    let stack:Stack=serde_json::from_value(serde_json::json!({"apiVersion":"firecrab.dev/v1alpha1","kind":"Stack","name":"service-replay",
+        "microNetworks":{"private":{"name":"private","subnetCidr":"172.31.20.0/24"}},
+        "microServices":{"app":{"network":"private","hostPort":30100,"config":original.spec}}})).unwrap();
+    let change = Change {
+        kind: ResourceKind::Service,
+        key: "app".into(),
+        resource_id: Some(original.service_id),
+        action: Action::Deploy,
+        fields: vec![],
+        reason: None,
+    };
+    execute(
+        &state,
+        &stack,
+        &change,
+        &BTreeMap::from([("private", network)]),
+        &PlanInputs::default(),
+        false,
+        apply,
+    )
+    .await
+    .unwrap();
+    let current = state
+        .store
+        .service_deployment(original.service_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.id, original.id);
+    assert_eq!(current.spec, original.spec);
+    assert_eq!(current.instances, original.instances);
+    assert_eq!(state.vms.lock().unwrap().len(), 1);
+    health.abort();
+    assert_ne!(
+        deploy_operation_id(apply, original.service_id),
+        deploy_operation_id(apply, Uuid::new_v4())
+    );
+}
+
+#[tokio::test]
+async fn iac_stack_service_recorded_child_rejects_changed_inputs_and_foreign_parent() {
+    let (_root, state, original, apply, network) = recorded_stack_service().await;
+    let mut changed = original.spec.clone();
+    changed.image = "ghcr.io/team/other:v2".into();
+    assert_eq!(
+        resume_recorded_service(&state, apply, original.service_id, &changed, network, 30100)
+            .await
+            .unwrap_err()
+            .code(),
+        "stack_deployment_identity_conflict"
+    );
+    assert_eq!(
+        resume_recorded_service(
+            &state,
+            apply,
+            original.service_id,
+            &original.spec,
+            network,
+            30101
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        "stack_deployment_identity_conflict"
+    );
+    let foreign = Uuid::new_v4();
+    let mut colliding = original.clone();
+    colliding.id = deploy_operation_id(foreign, original.service_id);
+    state.store.save_service_deployment(&colliding).unwrap();
+    assert_eq!(
+        resume_recorded_service(
+            &state,
+            foreign,
+            original.service_id,
+            &original.spec,
+            network,
+            30100
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        "stack_source_managed"
+    );
+    assert_eq!(
+        state
+            .store
+            .service_deployment(original.service_id)
+            .unwrap()
+            .unwrap()
+            .id,
+        colliding.id
+    );
+}
+
+#[tokio::test]
+async fn iac_stack_service_failed_original_child_is_not_replaced_by_another_deployment() {
+    let (_root, state, mut original, apply, network) = recorded_stack_service().await;
+    original.phase = ServicePhase::Failed;
+    state.store.save_service_deployment(&original).unwrap();
+    assert_eq!(
+        resume_recorded_service(
+            &state,
+            apply,
+            original.service_id,
+            &original.spec,
+            network,
+            30100
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        "stack_deployment_failed"
+    );
+    assert_eq!(
+        state
+            .store
+            .service_deployment(original.service_id)
+            .unwrap()
+            .unwrap()
+            .id,
+        original.id
+    );
+    assert!(state.vms.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn service_wait_rejects_missing_replaced_and_failed_deployments_and_requires_full_cleanup() {
     let (_root, state, mut deployment) = fixture().await;

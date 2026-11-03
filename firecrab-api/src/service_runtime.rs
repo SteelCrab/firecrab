@@ -50,16 +50,33 @@ pub(crate) async fn deploy_from_stack(
     request: DeployMicroServiceRequest,
     operation: Option<Uuid>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    let deployment_id = operation
+        .map(|apply| stack_deployment_id(apply, id))
+        .unwrap_or_else(Uuid::new_v4);
     deploy_with_id(
         state,
         request_id,
         id,
         request,
         operation,
-        Uuid::new_v4(),
+        deployment_id,
         false,
     )
     .await
+}
+
+/// The same parent/service pair retains one child identity for initial and rolling Deploy.
+pub(crate) fn stack_deployment_id(apply: Uuid, service: Uuid) -> Uuid {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(b"firecrab.stack.deploy.v1");
+    hash.update(apply.as_bytes());
+    hash.update(service.as_bytes());
+    let digest = hash.finalize();
+    let mut bytes: [u8; 16] = digest[..16].try_into().expect("SHA256 prefix");
+    bytes[6] = (bytes[6] & 15) | 128;
+    bytes[8] = (bytes[8] & 63) | 128;
+    Uuid::from_bytes(bytes)
 }
 
 /// The controller reserves this deployment UUID before a remote dispatch.
