@@ -34,7 +34,8 @@ retained controller pages but are not a physical secure-erasure guarantee.
 
 ## Preconditions and preview
 
-1. Use Linux, Python 3, `mkfs.ext4`, Linux `renameat2` and local persistent storage.
+1. Use Linux, Python 3, `mkfs.ext4`, Linux `renameat2` and mounted `/proc`.
+   The local volume filesystem must support `O_TMPFILE`.
    Run as the Firecrab service user from the same working directory and with the same
    `FIRECRAB_STORAGE_ROOTS` configuration as the controller. Initialize the updated
    controller once, then stop it. Do not use an older binary during this operation.
@@ -81,8 +82,10 @@ contents**. Use the exact digest returned by preview. The command takes the
 controller's exclusive scheduler lock and existing project/service/backup locks. It
 records the immutable operation, file identities and hashes before changing data.
 
-It creates a blank ext4 image with the same volume UUID and size. It records the
-image proof, installs it without overwriting an unexpected file and keeps the old
+It records a new unnamed image inode before publishing its temporary filename. An
+interruption before publication leaves no untracked file. It creates a blank ext4
+image with the same volume UUID and size, records the image proof, installs it
+without overwriting an unexpected file and keeps the old
 image until project-owned files are removed. It deletes only recorded files, rejects
 unexpected entries and removes only recorded empty directories. It then removes the
 old volume image, detaches the volume in the control DB, removes project/task/backup

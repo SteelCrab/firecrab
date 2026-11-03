@@ -323,19 +323,28 @@ def prepare_blank(db, record, io):
     candidates = record.setdefault("blankCandidates", [])
     if len(candidates) >= 32:
         raise ValueError("Too many interrupted blank-volume stages require inspection")
-    fd = os.open(stage, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    created = os.fstat(fd)
-    candidates.append(dict(path=str(stage), identity=[created.st_dev, created.st_ino]))
-    try:
-        transaction(db, lambda: save(db, record))
-    except BaseException:
-        os.close(fd)
-        raise
+    # Journal the inode before making it visible. An interrupted unnamed file is
+    # removed by the kernel; a published file is already covered by the journal.
+    tmpfile = getattr(os, "O_TMPFILE", None)
+    if tmpfile is None:
+        raise ValueError("Project deletion requires O_TMPFILE support on the volume filesystem")
+    fd = os.open(disk.parent, os.O_RDWR | tmpfile, 0o600)
     with os.fdopen(fd, "w+b") as file:
+        created = os.fstat(file.fileno())
+        candidates.append(dict(path=str(stage), identity=[created.st_dev, created.st_ino]))
+        transaction(db, lambda: save(db, record))
+        libc = ctypes.CDLL(None, use_errno=True)
+        linkat = libc.linkat
+        linkat.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        linkat.restype = ctypes.c_int
+        source = os.fsencode("/proc/self/fd/" + str(file.fileno()))
+        if linkat(-100, source, -100, os.fsencode(stage), 0x400) != 0:
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code))
+        io.sync_dir(disk.parent)
         file.truncate(record["size"])
         file.flush()
         os.fsync(file.fileno())
-    io.sync_dir(disk.parent)
     result = subprocess.run(["mkfs.ext4", "-F", "-q", "-U", record["volume"], "-E", "lazy_itable_init=0,lazy_journal_init=0", str(stage)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     if result.returncode != 0:
         raise ValueError("Could not create the blank replacement volume")
@@ -485,6 +494,16 @@ def delete_project(args, io):
                     return
                 if args.confirm_plan != preview_digest:
                     raise ValueError("Deletion plan changed or the preview digest was not confirmed; preview again")
+                # Fail before fencing controller startup if this filesystem cannot
+                # create an unnamed image or /proc cannot expose its descriptor.
+                tmpfile = getattr(os, "O_TMPFILE", None)
+                if tmpfile is None or not os.path.isdir("/proc/self/fd") or not getattr(ctypes.CDLL(None), "linkat", None):
+                    raise ValueError("Project deletion requires O_TMPFILE, linkat and mounted /proc")
+                try:
+                    probe = os.open(disk.parent, os.O_RDWR | tmpfile, 0o600)
+                except OSError as error:
+                    raise ValueError("The volume filesystem must support O_TMPFILE") from error
+                os.close(probe)
                 record = dict(id=args.operation, phase="staging", control=str(control), poolIdentity=pool_identity, previewDigest=preview_digest, oldDisk=old_disk, files=files, directories=directories, fileCount=count, logicalBytes=size, **info)
                 if len(encode(record).encode()) > 32 * 1024 * 1024:
                     raise ValueError("Deletion inventory exceeds its storage bound")
