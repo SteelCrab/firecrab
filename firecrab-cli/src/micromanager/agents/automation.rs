@@ -2,8 +2,10 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 
+mod local;
 #[cfg(all(test, unix))]
 mod transport_tests;
+use local::close_local_view;
 
 /// Unknown fields are ignored: settings saved by older builds still carry the removed
 /// `security` scan switch, and they must keep loading.
@@ -139,7 +141,10 @@ if [ -f "$root/latest" ]; then
   if [ -f "$root/$job/config" ]; then printf 'CONFIG:'; cat "$root/$job/config" | base64 -w0; printf '\n'; fi
 fi
 "#), Duration::from_secs(20))?;
-        parse_status(&output, &self.automation_config_path(id)?, guest.id, &agent)
+        let mut status =
+            parse_status(&output, &self.automation_config_path(id)?, guest.id, &agent)?;
+        status["local"] = self.local_view(id, &status["run"])?;
+        Ok(status)
     }
     pub fn automate(&self, id: Uuid, input: Request) -> Result<Value, Error> {
         if ["run", "configure_ci"].contains(&input.action.as_str()) {
@@ -160,6 +165,10 @@ fi
         let root = self.automation_root(id)?;
         match input.action.as_str() {
             "check_preview" => return self.check_automation_preview(id),
+            "start_local" => return self.start_local_view(id),
+            "stop_local" => {
+                close_local_view(&self.local_key(id)?);
+            }
             "start_preview" => {
                 let state = self.automation_status(id)?;
                 if state["run"]["state"] != "passed" || state["run"]["appReady"] != true {
@@ -190,6 +199,7 @@ sed 's/^.*) //' "/proc/$pid/stat" | awk '{{print $20}}' > "$root/$job/preview.st
                 guest.shell(&stop_preview_script(&root), Duration::from_secs(10))?;
             }
             "stop_app" => {
+                close_local_view(&self.local_key(id)?);
                 guest.shell(&stop_preview_script(&root), Duration::from_secs(10))?;
                 guest.shell(
                     &format!(

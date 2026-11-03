@@ -9,6 +9,7 @@ import {
   Check,
   ExternalLink,
   Globe,
+  Laptop,
   Play,
   RefreshCw,
   ShieldCheck,
@@ -39,6 +40,11 @@ const initialConfig: AppConfig = {
 };
 const publicPreview = (url?: string | null) =>
   !!url && /^https:\/\/[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com$/.test(url);
+const localPreview = (url?: string | null) =>
+  !!url && /^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}\/$/.test(url);
+// The local address works only in a browser on the computer that runs Firecrab.
+const onFirecrabComputer = () =>
+  ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
 type Proof = AddressProof & { runId: string; origin: string };
 export type WorkspaceAppProgress = {
   verified: boolean;
@@ -118,6 +124,11 @@ export default function AgentWorkspaceApp({
     status?.preview?.running && publicPreview(status.preview.publicUrl)
       ? status.preview.publicUrl!
       : "";
+  const local =
+    appReady && status?.local && localPreview(status.local.url)
+      ? status.local
+      : null;
+  const localCheck = local?.check;
   const addresses = (pipe?.firecrabTunnels || []).filter(
     (address) =>
       address.target.type === "preview" && address.target.vm_id === vm.id,
@@ -396,6 +407,43 @@ export default function AgentWorkspaceApp({
       }
     }
   }
+  // Separate from `act`: the local view leaves the public address and its HTTPS proof alone.
+  async function viewLocally(action: "start_local" | "stop_local") {
+    if (mutating.current || !ready) return;
+    const owner = identity.current,
+      active = () => alive.current && identity.current === owner;
+    mutating.current = true;
+    revision.current++;
+    setBusy(action);
+    setError("");
+    try {
+      const next = await native(action);
+      if (!active()) return;
+      if (next.vmId !== vm.id || next.agentId !== agentId)
+        throw Error(
+          t(
+            "Workspace identity changed.",
+            "작업 공간이 바뀌었어요. 다시 열어 주세요.",
+          ),
+        );
+      setStatus(next);
+      if (action === "start_local" && !next.local?.check?.reachable)
+        throw Error(
+          t(
+            "The app did not answer through the local connection. Check the app log, then retry.",
+            "로컬 연결로 앱이 응답하지 않았어요. 앱 로그를 확인하고 다시 시도해 주세요.",
+          ),
+        );
+    } catch (failure) {
+      if (active()) setError((failure as Error).message);
+    } finally {
+      mutating.current = false;
+      if (active()) {
+        setBusy("");
+        void inspect();
+      }
+    }
+  }
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void act("run");
@@ -601,7 +649,7 @@ export default function AgentWorkspaceApp({
         <div className="awa-card">
           <div className="awa-heading">
             <Globe />
-            <h3>{t("Public app address", "공개 앱 주소")}</h3>
+            <h3>{t("App address", "앱 주소")}</h3>
           </div>
           {!appReady && (
             <p>
@@ -680,6 +728,16 @@ export default function AgentWorkspaceApp({
             >
               {t("Use a temporary address", "임시 주소로 보기")}
             </button>
+            <button
+              className="btn"
+              disabled={!appReady || !!busy}
+              onClick={() => void viewLocally("start_local")}
+            >
+              <Laptop />
+              {busy === "start_local"
+                ? t("Connecting…", "연결 중…")
+                : t("View locally", "로컬에서 보기")}
+            </button>
           </div>
           {address?.error && <p className="awc-error">{address.error}</p>}
           {(origin || currentAddress) && (
@@ -736,6 +794,73 @@ export default function AgentWorkspaceApp({
               <div className="awa-actions">
                 <button className="btn" onClick={onTask}>
                   {t("Ask AI for another change", "AI에게 추가 수정 맡기기")}
+                </button>
+              </div>
+            </>
+          )}
+          {local && (
+            <>
+              <div className="awa-heading">
+                <Laptop />
+                <h3>{t("Local address", "로컬 주소")}</h3>
+              </div>
+              {localCheck?.reachable && (
+                <p className="awa-proof" role="status">
+                  <Check />
+                  HTTP {localCheck.status} · {localCheck.latencyMs} ms
+                </p>
+              )}
+              {onFirecrabComputer() ? (
+                <>
+                  <a
+                    className="awa-url"
+                    href={local.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {local.url}
+                    <ExternalLink />
+                  </a>
+                  <small>
+                    {t(
+                      "This address opens only in a browser on the computer that runs Firecrab. Nothing is published to the internet.",
+                      "이 주소는 Firecrab을 실행하는 컴퓨터의 브라우저에서만 열려요. 인터넷에는 공개되지 않아요.",
+                    )}
+                  </small>
+                  {!verified &&
+                    (mode === "preview" ? (
+                      <iframe
+                        title={t(
+                          "Running app preview",
+                          "실행 중인 앱 미리보기",
+                        )}
+                        src={local.url}
+                        sandbox="allow-scripts allow-forms allow-same-origin"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <button className="btn primary" onClick={onPreview}>
+                        {t("Open app preview", "앱 미리보기 열기")}
+                        <ExternalLink />
+                      </button>
+                    ))}
+                </>
+              ) : (
+                <p>
+                  {t(
+                    `This dashboard is open from another computer. ${local.url} opens only in a browser on the computer that runs Firecrab.`,
+                    `이 대시보드는 다른 컴퓨터에서 열려 있어요. ${local.url} 주소는 Firecrab을 실행하는 컴퓨터의 브라우저에서만 열려요.`,
+                  )}
+                </p>
+              )}
+              <div className="awa-actions">
+                <button
+                  className="btn"
+                  disabled={!ready || !!busy}
+                  onClick={() => void viewLocally("stop_local")}
+                >
+                  <Square />
+                  {t("Stop local access", "로컬 접속 중지")}
                 </button>
               </div>
             </>

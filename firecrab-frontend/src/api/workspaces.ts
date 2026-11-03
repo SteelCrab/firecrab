@@ -66,6 +66,18 @@ export type AppVerification = {
     publicUrl: string | null;
     error: string | null;
   };
+  /** The app on this computer's loopback through SSH. Older services omit it. */
+  local?: null | {
+    url: string;
+    hostPort: number;
+    appPort: number;
+    check: null | {
+      reachable: boolean;
+      status?: number;
+      latencyMs?: number;
+      error?: string;
+    };
+  };
 };
 export type AddressProof = {
   url: string;

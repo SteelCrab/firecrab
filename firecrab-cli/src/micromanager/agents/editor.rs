@@ -421,7 +421,7 @@ fn process_identity(pid: u32) -> Option<String> {
     (output.status.success() && !text.is_empty() && !text.contains("<defunct>"))
         .then(|| text.to_owned())
 }
-fn listener_owned(pid: u32, port: u16) -> bool {
+pub(super) fn listener_owned(pid: u32, port: u16) -> bool {
     #[cfg(target_os = "macos")]
     {
         Command::new("/usr/sbin/lsof")

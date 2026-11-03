@@ -27,6 +27,15 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- AI Sandbox **App address** has **View locally**. It opens the VM's running
+  app at `http://127.0.0.1:<port>/` on the computer that runs Firecrab,
+  through one SSH loopback forward to the VM. It needs no token and publishes
+  nothing to the internet. Firecrab uses the app's own port when that port is
+  free on the computer, else a free port, and checks the address once. The
+  address only opens in a browser on that computer. **Stop local access**,
+  **Stop app**, an app port change, a VM stop and a Firecrab service exit end
+  the forward. It does not count as the HTTPS check for a public address.
+  See [#576](https://github.com/SteelCrab/firecrab/issues/576).
 - AI Sandbox asks for GitHub's `workflow` permission when it connects a VM's
   GitHub account, so agents can push GitHub Actions workflow files such as the
   one **Create workflow** makes. An account connected without it shows

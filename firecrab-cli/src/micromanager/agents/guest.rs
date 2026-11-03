@@ -124,6 +124,10 @@ impl Guest {
             program: None,
         })
     }
+    /// The managed home `connect` took: `home` is `<managed home>/runtime/agents/microvms/<id>`.
+    pub fn controller_home(&self) -> Option<&Path> {
+        self.home.ancestors().nth(4)
+    }
     fn ssh_base(&self) -> Command {
         let default = PathBuf::from(if cfg!(windows) {
             "ssh.exe"
@@ -202,6 +206,25 @@ impl Guest {
             ])
             .arg(format!("127.0.0.1:{local}:127.0.0.1:{remote}"))
             .arg(format!("root@{}", self.address));
+        command
+    }
+    /// Like `forward`, for as long as the caller holds the ssh's stdin. The remote `cat`
+    /// ends when that pipe closes, so the forward ends with the process that started it,
+    /// however that process exits.
+    pub fn held_forward(&self, local: u16, remote: u16) -> Command {
+        let mut command = self.ssh_base();
+        command
+            .args([
+                "-o",
+                "ClearAllForwardings=no",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-L",
+            ])
+            .arg(format!("127.0.0.1:{local}:127.0.0.1:{remote}"))
+            .arg(format!("root@{}", self.address))
+            .arg("cat >/dev/null")
+            .stdin(Stdio::piped());
         command
     }
     pub fn shell(&self, script: &str, limit: Duration) -> Result<String, Error> {
