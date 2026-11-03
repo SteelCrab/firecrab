@@ -36,6 +36,14 @@ Entries land here as work merges, and move under the next version heading when t
   routes under `/api/code/` are removed. Their MicroVMs stay as regular
   MicroVMs, and their saved records are no longer read.
 
+### Fixed
+
+- AI Sandbox sessions work again after their MicroVM stops and starts. The next
+  status refresh starts the VM's Herdr runtime and reconnects each open session
+  in its folder. Claude Code continues its saved conversation; Codex starts a new
+  one and the session says so. Waiting tasks are never sent twice, and sign-in or
+  closed sessions are not started again.
+
 ## [0.4.3] - 2026-11-02
 
 AI Sandbox quick start and release validation updates for the React dashboard and guest workflows.

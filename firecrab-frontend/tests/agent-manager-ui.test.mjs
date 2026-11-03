@@ -1419,6 +1419,26 @@ test("a task waiting on CLI setup is sent only after the user resumes it", async
   );
 });
 
+test("a session restored after a VM restart says when its CLI starts a new conversation", async (t) => {
+  const { page, state } = await setup(t);
+  const pane = page.getByRole("region", { name: "Builder", exact: true });
+  await expect(pane).toBeVisible();
+  state.agents[0].recovery = "pending";
+  state.agents[0].state = "unknown";
+  await expect(pane).toContainText(
+    "Starting the CLI again after the VM restart",
+  );
+  state.agents[0].recovery = "fresh";
+  state.agents[0].state = "idle";
+  await expect(pane).toContainText(
+    "The CLI started a new conversation after the VM restart. The earlier one could not be continued.",
+  );
+  await expect(pane).not.toContainText("Starting the CLI again");
+  state.agents[0].recovery = "resumed";
+  await expect(pane).not.toContainText("VM restart");
+  assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
+});
+
 test("verification stays scoped to its VM and does not publish until the app is ready", async (t) => {
   const { page, state, fixture } = await setup(t);
   const panel = page.getByRole("region", { name: "Reviewer", exact: true });

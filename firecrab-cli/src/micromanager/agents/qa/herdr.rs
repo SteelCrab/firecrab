@@ -41,6 +41,9 @@ fn real_herdr_terminal_transport() {
         last_output: String::new(),
         request_digest: String::new(),
         pending_task: None,
+        conversation_id: None,
+        recovery: None,
+        chosen: None,
     };
     runtime.save(&[agent]).unwrap();
     runtime

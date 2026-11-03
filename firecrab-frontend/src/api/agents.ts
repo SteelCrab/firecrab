@@ -15,6 +15,8 @@ export type AgentSession = {
   launchError: string | null;
   hasPendingTask?: boolean;
   taskDeliveryUncertain?: boolean;
+  /** Set when the session came back after its VM restarted. */
+  recovery?: "pending" | "resumed" | "fresh";
   state:
     | "idle"
     | "working"

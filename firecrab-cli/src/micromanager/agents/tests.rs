@@ -253,13 +253,29 @@ if 'root=/root/.local/share/firecrab/github-auth' in script and 'nohup' not in s
  print((root/'github-status').read_text() if (root/'github-status').exists() else '');sys.exit(0)
 if 'herdr' not in args:sys.exit(0)
 args=args[args.index('herdr')+3:]
-pane={'pane_id':'w1:p1','workspace_id':'w1','terminal_id':'guest-terminal','agent_status':'blocked' if (root/'startup-blocked').exists() else 'idle','agent':'codex'}
+down=root/'server-down'
+generation=root/'guest-generation'
+layout=root/'guest-layout.json'
+# A VM stop ends the server. A new server restores the saved layout with new terminals.
+if args[:1]==['server']:
+ if down.exists():down.unlink();generation.write_text('guest-terminal-restored')
+ sys.exit(0)
+if down.exists():
+ if args[:2]==['status','server']:print(json.dumps({'result':{'running':False}}));sys.exit(0)
+ print(json.dumps({'error':{'code':'server_not_running','message':'no herdr server is running'}}));sys.exit(1)
+workspaces=json.loads(layout.read_text()) if layout.exists() else ['w1']
+def pane_of(w):return {'pane_id':w+':p1','workspace_id':w,'terminal_id':generation.read_text() if generation.exists() else 'guest-terminal','agent_status':'blocked' if (root/'startup-blocked').exists() else 'idle','agent':'codex'}
 if args[:2]==['agent','start'] and (root/'startup-blocked').exists():print(json.dumps({'error':{'message':'agent_not_ready'}}));sys.exit(0)
 if args[:2]==['agent','prompt'] and (root/'lost-ack').exists():print(json.dumps({'error':{'message':'connection interrupted'}}));sys.exit(0)
 if args[:2]==['status','server']:result={'running':True}
-elif args[:2]==['workspace','create']:result={'workspace':{'workspace_id':'w1'},'root_pane':pane}
-elif args[:2]==['pane','list']:result={'panes':[pane]}
-elif args[:2]==['pane','get']:result={'pane':pane}
+elif args[:2]==['workspace','create']:
+ w='w1'
+ if layout.exists():w='w%d'%(max([0]+[int(x[1:]) for x in workspaces])+1);layout.write_text(json.dumps(workspaces+[w]))
+ result={'workspace':{'workspace_id':w},'root_pane':pane_of(w)}
+elif args[:2]==['pane','list']:result={'panes':[pane_of(w) for w in workspaces]}
+elif args[:2]==['pane','get']:
+ if args[2].split(':')[0] not in workspaces:print(json.dumps({'error':{'message':'pane not found'}}));sys.exit(1)
+ result={'pane':pane_of(args[2].split(':')[0])}
 elif args[:2]==['pane','read']:print('guest terminal');sys.exit(0)
 else:result={}
 print(json.dumps({'result':result}))
@@ -639,6 +655,9 @@ pub(super) fn workspace_fixture() -> (tempfile::TempDir, Runtime, Agent) {
         last_output: String::new(),
         request_digest: String::new(),
         pending_task: None,
+        conversation_id: None,
+        recovery: None,
+        chosen: None,
     };
     runtime.save(std::slice::from_ref(&agent)).unwrap();
     (root, runtime, agent)

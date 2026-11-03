@@ -1456,6 +1456,22 @@ function AgentPane({
           )}
         </p>
       )}
+      {!agent.closed && agent.recovery === "pending" && (
+        <p className="am-attention">
+          {t(
+            "Starting the CLI again after the VM restart…",
+            "VM 재시작 후 CLI를 다시 시작하는 중이에요…",
+          )}
+        </p>
+      )}
+      {!agent.closed && agent.recovery === "fresh" && (
+        <p className="am-attention">
+          {t(
+            "The CLI started a new conversation after the VM restart. The earlier one could not be continued.",
+            "VM 재시작 후 CLI가 새 대화로 시작했어요. 이전 대화는 이어 갈 수 없었어요.",
+          )}
+        </p>
+      )}
     </section>
   );
 }

@@ -20,6 +20,7 @@ pub mod github;
 mod guest;
 mod models;
 pub mod project;
+mod recovery;
 pub mod rules;
 pub mod skills;
 pub mod terminal;
@@ -59,11 +60,28 @@ pub struct Agent {
     pub request_digest: String,
     #[serde(default)]
     pending_task: Option<PendingTask>,
+    /// The Claude Code conversation id given with `--session-id`. Other CLIs take none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<Uuid>,
+    /// Set when the session came back after a Herdr server restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recovery: Option<recovery::Recovery>,
+    /// The model and effort the task chose. Only these become CLI flags, also when
+    /// the CLI starts again; `model` and `effort` may hold the CLI's own settings.
+    /// `None` in records saved before efforts existed: their `model` is the choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chosen: Option<Choice>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct PendingTask {
     text: String,
     uncertain: bool,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Choice {
+    model: String,
+    effort: String,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -417,6 +435,29 @@ impl Runtime {
         fs::create_dir_all(&self.home)?;
         resource::write(&self.home.join("sessions.json"), &records)
     }
+    /// Read, change and write the session records under one lock. Keep slow Herdr
+    /// calls outside `edit`, so no writer saves an older copy over another change.
+    fn change<T>(
+        &self,
+        edit: impl FnOnce(&mut Vec<Agent>) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let _held = self.lock(recovery::RECORDS_LOCK)?;
+        let mut records = self.records()?;
+        let value = edit(&mut records)?;
+        self.save(&records)?;
+        Ok(value)
+    }
+    /// Change one session under the records lock and return its new state.
+    fn change_agent(&self, id: Uuid, edit: impl FnOnce(&mut Agent)) -> Result<Agent, Error> {
+        self.change(|records| {
+            let agent = records
+                .iter_mut()
+                .find(|a| a.id == id)
+                .ok_or_else(|| invalid("Unknown agent session"))?;
+            edit(agent);
+            Ok(agent.clone())
+        })
+    }
     fn command(&self, args: &[&str]) -> Result<Command, Error> {
         if let Some(guest) = &self.guest {
             return guest.command(&self.guest_script(args));
@@ -496,13 +537,8 @@ impl Runtime {
         }
         Ok(value.get("result").cloned().unwrap_or(value))
     }
-    fn ensure_server(&self) -> Result<(), Error> {
-        if self
-            .run(&["status", "server", "--json"])
-            .is_ok_and(|value| value["running"] == true)
-        {
-            return Ok(());
-        }
+    /// Start the private server; `ensure_server` decides when.
+    fn start_server(&self) -> Result<(), Error> {
         if let Some(guest) = &self.guest {
             let directory = format!("/root/.local/share/firecrab/agents/{}", self.session);
             let command = self
@@ -510,7 +546,9 @@ impl Runtime {
                 .replacen("exec env", "nohup env", 1);
             guest.shell(
                 &format!(
-                    "mkdir -p {}; {} </dev/null >{}/server.log 2>&1 &",
+                    "mkdir -p {}; printf %s {} >{}/config.toml; {} </dev/null >{}/server.log 2>&1 &",
+                    guest::quote(&directory),
+                    guest::quote(recovery::HERDR_CONFIG),
                     guest::quote(&directory),
                     command,
                     guest::quote(&directory)
@@ -531,6 +569,7 @@ impl Runtime {
             ));
         }
         fs::create_dir_all(&self.home)?;
+        fs::write(self.home.join("config.toml"), recovery::HERDR_CONFIG)?;
         let mut cmd = self.command(&["server"])?;
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
         #[cfg(unix)]
@@ -555,10 +594,9 @@ impl Runtime {
         Err(invalid("The private agent runtime could not start"))
     }
     pub fn status(&self) -> Result<Value, Error> {
-        let records = self.records()?;
         let mut reason = None;
         let panes = if self.program.is_some() && self.home.is_dir() {
-            match self.run(&["pane", "list"]) {
+            match self.live_panes() {
                 Ok(value) => Some(value),
                 Err(e) => {
                     reason = Some(e.to_string());
@@ -568,6 +606,10 @@ impl Runtime {
         } else {
             None
         };
+        let records = self.records()?;
+        if panes.is_some() {
+            self.relaunch_in_background(&records);
+        }
         let agents = records
             .iter()
             .map(|record| {
@@ -618,6 +660,8 @@ impl Runtime {
         value.as_object_mut().unwrap().remove("lastOutput");
         value.as_object_mut().unwrap().remove("requestDigest");
         value.as_object_mut().unwrap().remove("pendingTask");
+        value.as_object_mut().unwrap().remove("conversationId");
+        value.as_object_mut().unwrap().remove("chosen");
         value["hasPendingTask"] = json!(agent.pending_task.as_ref().is_some_and(|t| !t.uncertain));
         value["taskDeliveryUncertain"] =
             json!(agent.pending_task.as_ref().is_some_and(|t| t.uncertain));
@@ -752,7 +796,7 @@ impl Runtime {
                 serde_json::to_vec(&input).map_err(|_| invalid("Invalid agent settings"))?
             )
         );
-        let mut records = self.records()?;
+        let records = self.records()?;
         if let Some(agent) = records.iter().find(|a| a.id == input.id) {
             if agent.request_digest != digest {
                 return Err(invalid(
@@ -799,27 +843,10 @@ impl Runtime {
             return Err(invalid("Select an existing absolute working directory"));
         }
         // Only the task's own choices become flags; the CLI applies its settings itself.
-        let mut overrides = Vec::new();
-        if !input.model.is_empty() {
-            let flag = if input.kind == "claude" {
-                "--model"
-            } else {
-                "-m"
-            };
-            overrides.extend([flag.to_owned(), input.model.clone()]);
-        }
-        if !input.effort.is_empty() {
-            overrides.extend(if input.kind == "claude" {
-                ["--effort".to_owned(), input.effort.clone()]
-            } else {
-                // Codex has no effort flag. Any `-c` makes it skip its shared
-                // background server, so only a chosen effort adds one.
-                [
-                    "-c".to_owned(),
-                    format!("model_reasoning_effort={}", input.effort),
-                ]
-            });
-        }
+        let chosen = Choice {
+            model: input.model.clone(),
+            effort: input.effort.clone(),
+        };
         let (mut model, mut effort) = (input.model, input.effort);
         if let Some(guest) = &self.guest
             && !login
@@ -852,6 +879,7 @@ impl Runtime {
             .as_str()
             .ok_or_else(|| invalid("Herdr did not return a terminal identity"))?
             .to_owned();
+        let conversation_id = (!login && input.kind == "claude").then(Uuid::new_v4);
         let mut agent = Agent {
             id: input.id,
             name: input.name.trim().into(),
@@ -877,26 +905,15 @@ impl Runtime {
                 text: input.prompt.clone(),
                 uncertain: false,
             }),
+            conversation_id,
+            recovery: None,
+            chosen: Some(chosen),
         };
-        records.push(agent.clone());
-        self.save(&records)?;
-        let alias = format!("fc-{}", &agent.id.simple().to_string()[..12]);
-        let mut args = vec![
-            "agent",
-            "start",
-            &alias,
-            "--kind",
-            &agent.kind,
-            "--pane",
-            &agent.pane_id,
-            "--timeout",
-            "30000",
-        ];
-        if !overrides.is_empty() {
-            args.push("--");
-            args.extend(overrides.iter().map(String::as_str));
-        }
-        if login {
+        self.change(|records| {
+            records.push(agent.clone());
+            Ok(())
+        })?;
+        let launched = if login {
             let command = match agent.kind.as_str() {
                 "codex" => "codex login --device-auth",
                 "claude" => "claude auth login",
@@ -905,37 +922,37 @@ impl Runtime {
                 }
                 _ => return Err(invalid("This CLI login is not supported.")),
             };
-            args = vec!["pane", "run", &agent.pane_id, command];
-        }
-        agent.launch_error = self.run(&args).err().map(|e| e.to_string());
-        records
-            .iter_mut()
-            .find(|a| a.id == agent.id)
-            .unwrap()
-            .launch_error = agent.launch_error.clone();
-        self.save(&records)?;
+            self.run(&["pane", "run", &agent.pane_id, command])
+        } else {
+            self.start_cli(&agent, false)
+        };
+        agent.launch_error = launched.err().map(|e| e.to_string());
+        self.change_agent(agent.id, |a| a.launch_error = agent.launch_error.clone())?;
         if agent.launch_error.is_none() && agent.pending_task.is_some() {
             return self.deliver_task(agent.id);
         }
         Ok(self.projection(&agent, None))
     }
     pub fn deliver_task(&self, id: Uuid) -> Result<Value, Error> {
-        let mut records = self.records()?;
-        let agent = records
-            .iter_mut()
+        let agent = self
+            .records()?
+            .into_iter()
             .find(|a| a.id == id)
             .ok_or_else(|| invalid("Agent session not found"))?;
         if agent.closed {
             return Err(invalid("This agent session is closed"));
         }
-        let pane = self.pane(agent)?;
-        let Some(task) = agent.pending_task.as_mut() else {
-            return Ok(self.projection(agent, Some(&pane)));
+        let pane = self.pane(&agent)?;
+        let Some(task) = &agent.pending_task else {
+            return Ok(self.projection(&agent, Some(&pane)));
+        };
+        let uncertain = || {
+            invalid(
+                "The previous delivery may have reached the CLI. Inspect the terminal instead of automatically replaying the task.",
+            )
         };
         if task.uncertain {
-            return Err(invalid(
-                "The previous delivery may have reached the CLI. Inspect the terminal instead of automatically replaying the task.",
-            ));
+            return Err(uncertain());
         }
         if !["idle", "done"].contains(&pane["agent_status"].as_str().unwrap_or("")) {
             return Err(invalid(
@@ -947,26 +964,37 @@ impl Runtime {
         } else {
             format!("Role: {}\n\n{}", agent.role, task.text)
         };
-        task.uncertain = true;
-        let pane_id = agent.pane_id.clone();
-        self.save(&records)?;
-        let result = self.run(&["agent", "prompt", &pane_id, &text]);
-        let agent = records.iter_mut().find(|a| a.id == id).unwrap();
-        match result {
-            Ok(_) => {
-                agent.pending_task = None;
-                agent.launch_error = None;
-            }
-            Err(e) => agent.launch_error = Some(e.to_string()),
+        // Mark the delivery uncertain before sending. Only the first claim sends.
+        let claimed = self.change(|records| {
+            let waiting = records
+                .iter_mut()
+                .find(|a| a.id == id && !a.closed)
+                .and_then(|a| a.pending_task.as_mut())
+                .filter(|t| !t.uncertain);
+            Ok(waiting.map(|t| t.uncertain = true).is_some())
+        })?;
+        if !claimed {
+            return Err(uncertain());
         }
-        let value = self.projection(agent, Some(&pane));
-        self.save(&records)?;
-        Ok(value)
+        let result = self.run(&["agent", "prompt", &agent.pane_id, &text]);
+        let agent = self.change_agent(id, |a| match result {
+            Ok(_) => {
+                a.pending_task = None;
+                a.launch_error = None;
+            }
+            Err(e) => a.launch_error = Some(e.to_string()),
+        })?;
+        Ok(self.projection(&agent, Some(&pane)))
     }
     pub fn input(&self, id: Uuid, input: Input) -> Result<Value, Error> {
         let agent = self.agent(id)?;
         if agent.closed {
             return Err(invalid("This agent session is closed"));
+        }
+        if agent.recovery == Some(recovery::Recovery::Pending) {
+            return Err(invalid(
+                "This session's CLI is starting again after a restart. Try again in a moment.",
+            ));
         }
         if input.text.is_some() && self.automation_busy(id)? {
             return Err(invalid(
@@ -1001,37 +1029,31 @@ impl Runtime {
         if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
             return Err(invalid("Use a one-line session name up to 128 bytes."));
         }
-        let mut records = self.records()?;
-        let index = records
-            .iter()
-            .position(|a| a.id == id)
-            .ok_or_else(|| invalid("Unknown agent session"))?;
-        records[index].name = name.into();
-        self.save(&records)?;
-        let agent = &records[index];
+        let agent = self.change_agent(id, |a| a.name = name.into())?;
         let pane = if agent.closed {
             None
         } else {
-            self.pane(agent).ok()
+            self.pane(&agent).ok()
         };
-        Ok(self.projection(agent, pane.as_ref()))
+        Ok(self.projection(&agent, pane.as_ref()))
     }
     pub fn close(&self, id: Uuid) -> Result<Value, Error> {
-        let mut records = self.records()?;
-        let index = records
-            .iter()
-            .position(|a| a.id == id)
+        let agent = self
+            .records()?
+            .into_iter()
+            .find(|a| a.id == id)
             .ok_or_else(|| invalid("Unknown agent session"))?;
-        if records[index].closed {
-            return Ok(self.projection(&records[index], None));
+        if agent.closed {
+            return Ok(self.projection(&agent, None));
         }
-        self.pane(&records[index])?;
+        self.pane(&agent)?;
         let output = self.inspect(id)?["text"].as_str().unwrap_or("").to_owned();
-        self.run(&["workspace", "close", &records[index].workspace_id])?;
-        records[index].closed = true;
-        records[index].last_output = output;
-        self.save(&records)?;
-        Ok(self.projection(&records[index], None))
+        self.run(&["workspace", "close", &agent.workspace_id])?;
+        let agent = self.change_agent(id, |a| {
+            a.closed = true;
+            a.last_output = output;
+        })?;
+        Ok(self.projection(&agent, None))
     }
 }
 

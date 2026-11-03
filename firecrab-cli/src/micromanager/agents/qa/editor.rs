@@ -80,6 +80,9 @@ fn real_disposable_editor_install_and_forward() {
                 last_output: String::new(),
                 request_digest: String::new(),
                 pending_task: None,
+                conversation_id: None,
+                recovery: None,
+                chosen: None,
             }])
             .unwrap();
     }

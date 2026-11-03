@@ -65,6 +65,9 @@ fn real_disposable_microvm_pipeline() {
         last_output: String::new(),
         request_digest: String::new(),
         pending_task: None,
+        conversation_id: None,
+        recovery: None,
+        chosen: None,
     };
     runtime.save(std::slice::from_ref(&agent)).unwrap();
     let nginx = format!(
