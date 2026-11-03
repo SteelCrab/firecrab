@@ -545,6 +545,71 @@ fi
 "#
     )
 }
+/// The program a command starts with, when it is a plain name that the shell finds in PATH.
+/// Paths, variables, quotes and assignments are left to the shell.
+fn program(command: &str) -> Option<&str> {
+    command.split_whitespace().next().filter(|word| {
+        !word.starts_with('-')
+            && word
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
+    })
+}
+/// Stops before the command runs when its program is missing, and names that program.
+fn require(command: &str) -> String {
+    let Some(name) = program(command) else {
+        return String::new();
+    };
+    let message = format!(
+        "'{name}' is not installed in this VM. Install it in the VM terminal or ask the coding agent to install it."
+    );
+    format!(
+        "command -v {} >/dev/null 2>&1 || {{ echo {} >&2; exit 127; }}\n",
+        guest::quote(name),
+        guest::quote(&message)
+    )
+}
+/// Installs Node.js when the project needs it, with the checksum-verified installer that skills use.
+/// A separate shell keeps `set -e` active inside the installer, so a failed check stops it.
+/// `umask 022` gives the shared runtime the same permissions as a skills install.
+fn node_setup(config: &Config) -> String {
+    let named = [
+        &config.test_command,
+        &config.build_command,
+        &config.start_command,
+    ]
+    .into_iter()
+    .any(|command| {
+        program(command).is_some_and(|p| ["npm", "npx", "node", "pnpm", "yarn"].contains(&p))
+    });
+    let installer = format!(
+        "umask 022\n{}install_node\n",
+        include_str!("skills_node.sh")
+    );
+    // Only a command that names a Node.js program needs it. A package.json alone can belong to
+    // tooling, so a failed install must not stop a run that works without Node.js.
+    let (needed, failed) = if named {
+        (
+            "true",
+            "echo 'Node.js could not be installed in this VM. Install it in the VM terminal or ask the coding agent to install it.' >&2\n    exit 1",
+        )
+    } else {
+        (
+            "[ -f package.json ]",
+            "echo 'Node.js could not be installed in this VM. Continuing without it.' >&2",
+        )
+    };
+    format!(
+        r#"if {needed} && ! {{ command -v node && command -v npm; }} >/dev/null 2>&1; then
+  echo 'Installing Node.js for this project'
+  if ! timeout --kill-after=5 600 sh -eu -c {installer} || ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    {failed}
+  fi
+fi
+"#,
+        installer = guest::quote(&installer)
+    )
+}
 fn pipeline(cwd: &str, root: &str, id: Uuid, config: &Config) -> String {
     let mut s = format!(
         r#"#!/bin/sh
@@ -557,12 +622,14 @@ job="$root/{id}"
 finish() {{ result=$?; trap - EXIT; printf '%s' "$result" > "$job/exit"; if [ "$result" -eq 0 ]; then printf passed > "$job/state"; elif [ "$result" -eq 10 ] && [ "$(cat "$job/phase")" = security ]; then printf findings > "$job/state"; else printf failed > "$job/state"; fi; rm -f "$root/lock/boot"; rmdir "$root/lock" 2>/dev/null || :; exit "$result"; }}
 trap finish EXIT
 cd {cwd}
-printf tests > "$job/phase"
+{node}printf tests > "$job/phase"
 echo 'Running project tests'
-timeout --kill-after=5 900 sh -c {test}
+{require}timeout --kill-after=5 900 sh -c {test}
 "#,
         path = guest::quote(guest::GUEST_PATH),
         cwd = guest::quote(cwd),
+        node = node_setup(config),
+        require = require(&config.test_command),
         test = guest::quote(&config.test_command)
     );
     if config.security {
@@ -578,12 +645,12 @@ trivy convert --format template --template '{{range .}}{{len .Vulnerabilities}} 
 "#);
     }
     if !config.build_command.trim().is_empty() {
-        s.push_str(&format!("printf build > \"$job/phase\"\necho 'Building project'\ntimeout --kill-after=5 900 sh -c {}\n",guest::quote(&config.build_command)));
+        s.push_str(&format!("printf build > \"$job/phase\"\necho 'Building project'\n{}timeout --kill-after=5 900 sh -c {}\n",require(&config.build_command),guest::quote(&config.build_command)));
     }
     if !config.start_command.trim().is_empty() {
         s.push_str(&format!(r#"printf preview > "$job/phase"
 echo 'Starting test application'
-if curl --connect-timeout 1 --max-time 2 -s -o /dev/null http://{app}/; then echo 'The app port is already in use. Choose another port before starting this app.' >&2; exit 1; fi
+{require}if curl --connect-timeout 1 --max-time 2 -s -o /dev/null http://{app}/; then echo 'The app port is already in use. Choose another port before starting this app.' >&2; exit 1; fi
 command -v setsid >/dev/null || {{ echo 'Install util-linux to start the test app.' >&2; exit 1; }}
 nohup setsid env FIRECRAB_AUTOMATION_JOB={id} sh -c {start} </dev/null >"$job/app.log" 2>&1 &
 pid=$!
@@ -595,7 +662,7 @@ for attempt in $(seq 1 45); do
 done
 echo 'The test app did not become ready. Listen on 127.0.0.1 or 0.0.0.0 at the selected port.' >&2
 exit 1
-"#,app=std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(),config.port),start=guest::quote(&config.start_command)));
+"#,app=std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(),config.port),require=require(&config.start_command),start=guest::quote(&config.start_command)));
     }
     s.push_str("printf complete > \"$job/phase\"\necho 'Verification completed'\n");
     s
@@ -697,38 +764,59 @@ mod tests {
         assert!(connector_asset(&release, name).is_err());
     }
     #[cfg(unix)]
+    fn fake(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(unix)]
     fn run_pipeline(
         test: &str,
         security: bool,
     ) -> (tempfile::TempDir, std::process::Output, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
-        let bin = root.join("bin");
-        fs::create_dir(&bin).unwrap();
-        let timeout = bin.join("timeout");
-        fs::write(&timeout, "#!/bin/sh\nshift; shift; exec \"$@\"\n").unwrap();
-        fs::set_permissions(&timeout, fs::Permissions::from_mode(0o755)).unwrap();
-        let trivy = bin.join("trivy");
-        fs::write(&trivy,format!("#!/bin/sh\ncase \"$1\" in --version) printf 'Version: {TRIVY_VERSION}\\n';; fs) exit 10;; convert) while [ \"$1\" != --output ]; do shift; done; printf '1 2 3\\n' > \"$2\";; esac\n")).unwrap();
-        fs::set_permissions(&trivy, fs::Permissions::from_mode(0o755)).unwrap();
-        let id = Uuid::new_v4();
-        let job = root.join(id.to_string());
-        fs::create_dir(&job).unwrap();
-        fs::create_dir(root.join("lock")).unwrap();
-        fs::write(root.join("lock/boot"), "").unwrap();
         let config = Config {
             test_command: test.into(),
             build_command: "printf built > built".into(),
             security,
             ..Config::default()
         };
-        let script = pipeline(root.to_str().unwrap(), root.to_str().unwrap(), id, &config).replace(
-            &format!("export PATH={}", guest::quote(guest::GUEST_PATH)),
+        run_config(&config, |_| {})
+    }
+    /// Runs the pipeline in a temporary project. PATH holds only fakes and a few basic tools,
+    /// so the host's own Node.js, cargo or apk never changes the result.
+    #[cfg(unix)]
+    fn run_config(
+        config: &Config,
+        project: impl FnOnce(&Path),
+    ) -> (tempfile::TempDir, std::process::Output, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let bin = root.join("bin");
+        fs::create_dir(&bin).unwrap();
+        for tool in ["sh", "cat", "cp", "head", "rm", "rmdir"] {
+            let source = ["/bin", "/usr/bin"]
+                .iter()
+                .map(|dir| Path::new(dir).join(tool))
+                .find(|path| path.exists())
+                .unwrap();
+            std::os::unix::fs::symlink(source, bin.join(tool)).unwrap();
+        }
+        fake(&bin.join("timeout"), "shift; shift; exec \"$@\"\n");
+        fake(
+            &bin.join("trivy"),
             &format!(
-                "export PATH={}",
-                guest::quote(&format!("{}:/usr/bin:/bin", bin.display()))
+                "case \"$1\" in --version) printf 'Version: {TRIVY_VERSION}\\n';; fs) exit 10;; convert) while [ \"$1\" != --output ]; do shift; done; printf '1 2 3\\n' > \"$2\";; esac\n"
             ),
+        );
+        project(root);
+        let id = Uuid::new_v4();
+        let job = root.join(id.to_string());
+        fs::create_dir(&job).unwrap();
+        fs::create_dir(root.join("lock")).unwrap();
+        fs::write(root.join("lock/boot"), "").unwrap();
+        let script = pipeline(root.to_str().unwrap(), root.to_str().unwrap(), id, config).replace(
+            &format!("export PATH={}", guest::quote(guest::GUEST_PATH)),
+            &format!("export PATH={}", guest::quote(&bin.display().to_string())),
         );
         let output = Command::new("/bin/sh")
             .arg("-c")
@@ -762,6 +850,201 @@ mod tests {
         let (_temp, output, job) = run_pipeline("exit 10", false);
         assert_eq!(output.status.code(), Some(10));
         assert_eq!(fs::read_to_string(job.join("state")).unwrap(), "failed");
+    }
+    /// A fake `apk` makes the real `install_node` take its Alpine branch. It copies fake
+    /// `node` and `npm` into PATH, then exits with `status`.
+    #[cfg(unix)]
+    fn fake_node_installer(root: &Path, status: u8) {
+        let (dist, bin) = (root.join("dist"), root.join("bin"));
+        fs::create_dir(&dist).unwrap();
+        fake(&dist.join("node"), "exit 0\n");
+        fake(&dist.join("npm"), "printf '%s\\n' \"$*\" >> npm-calls\n");
+        let quote = |path: PathBuf| guest::quote(&path.display().to_string());
+        fake(
+            &bin.join("apk"),
+            &format!(
+                "printf '%s\\n' \"$*\" >> {}\ncp {} {} {}\nexit {status}\n",
+                quote(root.join("apk-calls")),
+                quote(dist.join("node")),
+                quote(dist.join("npm")),
+                quote(bin)
+            ),
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn node_projects_without_node_install_it_once_before_tests() {
+        let package = Config {
+            test_command: "npm test".into(),
+            build_command: "npm run build".into(),
+            ..Config::default()
+        };
+        let command = Config {
+            test_command: "node --test".into(),
+            ..Config::default()
+        };
+        for (config, has_package) in [(package, true), (command, false)] {
+            let (temp, output, job) = run_config(&config, |root| {
+                if has_package {
+                    fs::write(root.join("package.json"), "{}").unwrap();
+                }
+                fake_node_installer(root, 0);
+            });
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(
+                fs::read_to_string(temp.path().join("apk-calls")).unwrap(),
+                "add --no-cache nodejs npm\n"
+            );
+            let log = String::from_utf8_lossy(&output.stdout);
+            assert!(log.contains("Installing Node.js for this project"), "{log}");
+            assert_eq!(fs::read_to_string(job.join("state")).unwrap(), "passed");
+            if has_package {
+                assert_eq!(
+                    fs::read_to_string(temp.path().join("npm-calls")).unwrap(),
+                    "test\nrun build\n"
+                );
+            }
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn node_projects_with_node_skip_the_install() {
+        let config = Config {
+            test_command: "npm test".into(),
+            ..Config::default()
+        };
+        let (temp, output, _job) = run_config(&config, |root| {
+            fs::write(root.join("package.json"), "{}").unwrap();
+            fake_node_installer(root, 0);
+            for name in ["node", "npm"] {
+                fs::copy(root.join("dist").join(name), root.join("bin").join(name)).unwrap();
+            }
+        });
+        assert!(output.status.success(), "{output:?}");
+        assert!(!temp.path().join("apk-calls").exists());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("Installing Node.js"));
+        assert_eq!(
+            fs::read_to_string(temp.path().join("npm-calls")).unwrap(),
+            "test\n"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn failed_node_install_stops_before_tests_with_a_clear_message() {
+        let config = Config {
+            test_command: "npm test".into(),
+            ..Config::default()
+        };
+        // The fake leaves node and npm behind, so only the installer's own failure can stop it.
+        let (temp, output, job) = run_config(&config, |root| {
+            fs::write(root.join("package.json"), "{}").unwrap();
+            fake_node_installer(root, 1);
+        });
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            errors.contains("Node.js could not be installed in this VM."),
+            "{errors}"
+        );
+        assert!(!temp.path().join("npm-calls").exists());
+        assert_eq!(fs::read_to_string(job.join("state")).unwrap(), "failed");
+        assert!(!temp.path().join("lock").exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn package_json_alone_continues_after_a_failed_node_install() {
+        // Tooling such as prettier or husky adds a package.json to projects that test with cargo or make.
+        let warning = "Node.js could not be installed in this VM. Continuing without it.";
+        for status in [0, 1] {
+            let (temp, output, job) = run_config(
+                &Config {
+                    test_command: "printf tested > tested".into(),
+                    ..Config::default()
+                },
+                |root| {
+                    fs::write(root.join("package.json"), "{}").unwrap();
+                    fake_node_installer(root, status);
+                },
+            );
+            assert!(output.status.success(), "{status}: {output:?}");
+            assert_eq!(
+                fs::read_to_string(temp.path().join("apk-calls")).unwrap(),
+                "add --no-cache nodejs npm\n"
+            );
+            assert!(temp.path().join("tested").exists(), "{status}");
+            assert_eq!(fs::read_to_string(job.join("state")).unwrap(), "passed");
+            let errors = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(errors.contains(warning), status != 0, "{status}: {errors}");
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn missing_programs_stop_before_their_command_runs() {
+        let missing = "cargo check; printf ran > ran";
+        for (phase, config) in [
+            (
+                "tests",
+                Config {
+                    test_command: missing.into(),
+                    ..Config::default()
+                },
+            ),
+            (
+                "build",
+                Config {
+                    test_command: "true".into(),
+                    build_command: missing.into(),
+                    ..Config::default()
+                },
+            ),
+            (
+                "preview",
+                Config {
+                    test_command: "true".into(),
+                    start_command: missing.into(),
+                    port: 3000,
+                    ..Config::default()
+                },
+            ),
+        ] {
+            let (temp, output, job) = run_config(&config, |_| {});
+            assert_eq!(output.status.code(), Some(127), "{phase}: {output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(
+                    "'cargo' is not installed in this VM. Install it in the VM terminal or ask the coding agent to install it."
+                ),
+                "{phase}: {output:?}"
+            );
+            assert!(!temp.path().join("ran").exists(), "{phase}");
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("Installing Node.js"));
+            assert_eq!(fs::read_to_string(job.join("phase")).unwrap(), phase);
+            assert_eq!(fs::read_to_string(job.join("state")).unwrap(), "failed");
+        }
+    }
+    #[test]
+    fn only_plain_program_names_are_checked_before_a_command_runs() {
+        assert_eq!(program("npm test "), Some("npm"));
+        assert_eq!(program("  cargo test --locked"), Some("cargo"));
+        assert_eq!(program("python3 -m pytest"), Some("python3"));
+        for command in [
+            "",
+            "./run-tests.sh",
+            "CI=1 npm test",
+            "$HOME/bin/check",
+            "'npm' test",
+            "npm;true",
+            "-x",
+        ] {
+            assert_eq!(program(command), None, "{command}");
+        }
+        let script = pipeline(
+            "/workspace",
+            "/root/jobs",
+            Uuid::new_v4(),
+            &Config::default(),
+        );
+        assert!(script.contains("https://nodejs.org/dist/latest-v24.x"));
+        assert!(script.contains("sha256sum -c"));
     }
     #[test]
     fn automation_cannot_fall_back_to_the_native_host_workspace() {

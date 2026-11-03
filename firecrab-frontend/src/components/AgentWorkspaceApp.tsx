@@ -610,6 +610,14 @@ export default function AgentWorkspaceApp({
               {run.findings.secrets} / {run.findings.misconfigurations}
             </p>
           )}
+          {run?.exitCode === 127 && (
+            <p>
+              {t(
+                "The command was not found in this VM.",
+                "이 VM에서 명령을 찾지 못했어요.",
+              )}
+            </p>
+          )}
           {run?.log && (
             <details>
               <summary>{t("Verification log", "검증 로그")}</summary>

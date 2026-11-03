@@ -2989,6 +2989,42 @@ test(
   },
 );
 
+test("app run explains a command that is missing in the VM", async (t) => {
+  const { page, state } = await setup(t);
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "Run app", exact: true })
+    .click();
+  await expect.poll(() => !!state.automation).toBe(true);
+  const refresh = page.getByRole("button", {
+    name: "Refresh app status",
+    exact: true,
+  });
+  const result = page.locator(".awa-run");
+  const explanation = page.getByText("The command was not found in this VM.", {
+    exact: true,
+  });
+  const failed = (exitCode) => ({
+    id: "missing-command",
+    state: "failed",
+    phase: "tests",
+    exitCode,
+    appReady: false,
+    appRunning: false,
+    config: state.automation.config,
+    log: "Running project tests\nsh: 1: npm: not found",
+    findings: null,
+  });
+  state.automation.run = failed(1);
+  await refresh.click();
+  await expect(result).toContainText("exit 1");
+  await expect(explanation).toHaveCount(0);
+  state.automation.run = failed(127);
+  await refresh.click();
+  await expect(result).toContainText("exit 127");
+  await expect(explanation).toBeVisible();
+});
+
 async function openSkills(page, locale = "en") {
   await page
     .locator(".am-quick-sidebar")
