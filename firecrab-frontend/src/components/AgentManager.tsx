@@ -479,8 +479,9 @@ function VmAgentWorkspace({
       view="ai-sandbox"
       actions={
         <>
-          {agents.length > 0 && page === "tasks" && (
+          {page === "tasks" && (
             <button
+              type="button"
               className="btn primary"
               onClick={openEditor}
               disabled={!canLaunch || creating}

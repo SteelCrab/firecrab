@@ -1619,6 +1619,7 @@ test("failed preparation retries keep the operation ID and install only the sele
       state: posted.length === 1 ? "failed" : "ready",
       phase: posted.length === 1 ? "image" : "complete",
       error: posted.length === 1 ? "Download unavailable" : null,
+      log: posted.length === 1 ? "Ubuntu OCI import failed: manifest unavailable" : "",
     });
   });
   const row = vm(10, { id, state: "running", name: "my-workspace" });
@@ -1628,6 +1629,10 @@ test("failed preparation retries keep the operation ID and install only the sele
     .getByRole("button", { name: "Create workspace", exact: true })
     .click();
   await expect(page.getByRole("alert")).toContainText("Download unavailable");
+  await page.getByText("Installation log", { exact: true }).click();
+  await expect(page.locator(".awc-form pre")).toContainText(
+    "Ubuntu OCI import failed: manifest unavailable",
+  );
   await page
     .getByRole("button", { name: "Continue preparation", exact: true })
     .click();

@@ -1,5 +1,6 @@
 //! Browser device authorization through GitHub CLI inside the selected MicroVM.
 use super::*;
+use base64::{Engine, engine::general_purpose::STANDARD};
 
 #[cfg(all(test, unix))]
 mod transport_tests;
@@ -57,6 +58,78 @@ impl Runtime {
         }
         Ok(json!({"repositories":rows}))
     }
+
+    pub fn create_github_repository(&self, input: CreateRepository) -> Result<Value, Error> {
+        let guest = self
+            .guest
+            .as_ref()
+            .ok_or_else(|| invalid("Select a MicroVM first."))?;
+        if !guest.authenticated.contains("github") {
+            return Err(invalid("Connect this MicroVM's GitHub account first."));
+        }
+        if input.id.is_nil()
+            || input.name.is_empty()
+            || input.name.len() > 100
+            || !input
+                .name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+            || input.name.to_ascii_lowercase().ends_with(".git")
+            || guest::repository_url(&format!("owner/{}", input.name)).is_err()
+        {
+            return Err(invalid(
+                "Use a repository name of up to 100 letters, digits, '.', '_' or '-'; do not start with '.', include '..', or end with '.git'.",
+            ));
+        }
+        if input.description.chars().count() > 350
+            || input.description.chars().any(char::is_control)
+        {
+            return Err(invalid(
+                "Repository description must be one line of up to 350 characters.",
+            ));
+        }
+        let project = self.vm_project()?;
+        if matches!(project["state"].as_str(), Some("ready" | "preparing")) {
+            return Err(invalid(
+                "This MicroVM already has a project. Select a new workspace before creating a repository.",
+            ));
+        }
+        let request = STANDARD.encode(serde_json::to_vec(&input)?);
+        let payload = STANDARD.encode(serde_json::to_vec(&json!({
+            "name":&input.name,"description":&input.description,
+            "private":input.private,"auto_init":input.initialize,
+        }))?);
+        let script = format!(
+            "/bin/sh -c {} -- {} {} {}",
+            guest::quote(include_str!("github_create.sh")),
+            guest::quote(&input.id.to_string()),
+            guest::quote(&request),
+            guest::quote(&payload)
+        );
+        let output = guest.shell(&script, Duration::from_secs(65))?;
+        let created: Repository = serde_json::from_str(&output)?;
+        guest::repository_url(&created.name)?;
+        if created.name.split('/').nth(1) != Some(input.name.as_str())
+            || created.private != input.private
+            || created.archived
+        {
+            return Err(invalid(
+                "The created GitHub repository identity does not match the request. Check GitHub before retrying.",
+            ));
+        }
+        serde_json::to_value(created).map_err(|error| invalid(error.to_string()))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateRepository {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub private: bool,
+    pub initialize: bool,
 }
 
 #[derive(Serialize, Deserialize)]
