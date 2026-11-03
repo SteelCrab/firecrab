@@ -2,7 +2,7 @@
 
 This API is the stage 2 foundation of [#548](https://github.com/SteelCrab/firecrab/issues/548).
 It observes, adopts, transfers and releases ownership metadata without changing resource configuration or data.
-The full service contract remains in [the inventory](../reference/iac-services.md).
+The full service contract remains in [the inventory](../reference/iac-services.md). The [shared resource-plan API](iac-resource-plans.md) currently executes Shell configuration only.
 
 ## Current support
 

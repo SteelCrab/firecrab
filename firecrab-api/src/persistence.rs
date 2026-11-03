@@ -72,6 +72,7 @@ mod iac_native_schema;
 mod iac_operation_keys;
 mod iac_operation_queries;
 mod iac_owners;
+pub(crate) mod iac_resource_plans;
 mod iac_resources;
 mod iac_sandbox_tunnels;
 pub(crate) mod iac_vm_deletes;
@@ -1476,6 +1477,15 @@ impl Store {
     ) -> Result<u32, PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "shell".into(),
+                id: shell_id.to_string(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
         let exists: bool = tx
             .prepare("SELECT 1 FROM shells WHERE id = ?1")?
             .exists(params![shell_id.to_string()])?;
@@ -1657,6 +1667,15 @@ impl Store {
     pub fn delete_shell(&self, id: Uuid) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "shell".into(),
+                id: id.to_string(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
         let exists: bool = tx
             .prepare("SELECT 1 FROM shells WHERE id = ?1")?
             .exists(params![id.to_string()])?;

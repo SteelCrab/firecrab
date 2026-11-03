@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Add typed shared Shell plans for Stack and Terraform ownership. Freeze exact
+  inputs before execution, commit configuration and original receipts atomically,
+  preserve VM revision pins and reject stale plans or conflicting public writes.
+  Other executable configuration adapters remain pending in #548.
+
 - Pin VM cleanup to its original physical directories and disk generation.
   Reject storage remapping, preserve retained artifact identity and require
   explicit legacy proof review before resuming unproven cleanup.

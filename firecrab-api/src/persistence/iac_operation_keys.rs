@@ -6,6 +6,7 @@ use rusqlite::{Connection, Transaction, TransactionBehavior};
 const CONFLICT: &str = "iac_operation_identity_conflict";
 const TABLES: &[(&str, &str)] = &[
     ("iac_native_operations", "native"),
+    ("iac_resource_plans", "native"),
     ("iac_owner_changes", "ownership"),
     ("iac_host_owner_intents", "ownership"),
     ("stack_applies", "stack"),

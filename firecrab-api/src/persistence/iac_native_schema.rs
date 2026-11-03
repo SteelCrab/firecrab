@@ -32,6 +32,12 @@ fn upgrade(conn: &Connection) -> Result<(), PersistenceError> {
     conn.pragma_update(None, "foreign_keys", false)?;
     let result = (|| {
         let tx = conn.unchecked_transaction()?;
+        // The plan table survives this rebuild. Its forward-reference trigger
+        // must not point at a temporarily missing native-operation table.
+        tx.execute_batch(
+            "DROP TRIGGER IF EXISTS iac_plan_native_identity;
+            DROP TRIGGER IF EXISTS iac_native_plan_identity;",
+        )?;
         tx.execute_batch(&format!("CREATE TABLE iac_native_operations_upgrade {COLUMNS};
             INSERT INTO iac_native_operations_upgrade SELECT operation_id,kind,resource_id,state,status FROM iac_native_operations;
             DROP TABLE iac_native_operations;

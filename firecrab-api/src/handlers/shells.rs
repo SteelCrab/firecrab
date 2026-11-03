@@ -213,7 +213,7 @@ pub async fn delete_shell(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn validate_shell_write(
+pub(crate) fn validate_shell_write(
     name: &str,
     description: Option<&str>,
     content: &str,

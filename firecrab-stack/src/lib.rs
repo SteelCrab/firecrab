@@ -15,6 +15,7 @@ mod lifecycle;
 mod native_operation;
 mod ownership;
 mod planning;
+mod resource_plan;
 mod source;
 pub use apply::{
     ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, StepState, desired_hash,
@@ -31,6 +32,10 @@ pub use ownership::{
 pub use planning::{
     Action, Binding, Change, DeleteStackRequest, Inventory, Plan, RegisterStackRequest,
     ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, fingerprint, plan,
+};
+pub use resource_plan::{
+    ApplyResourcePlan, PlanResource, ResourceConfiguration, ResourcePlan, ResourcePlanAction,
+    ResourcePlanReceipt,
 };
 pub use source::{
     ConfigureGitSource, DeleteGitSource, GitCheck, GitCheckState, GitCredential, GitRevision,

@@ -13,7 +13,17 @@ CREATE TABLE IF NOT EXISTS iac_native_dependencies (
  kind TEXT NOT NULL, resource_id TEXT NOT NULL, ownership TEXT NOT NULL,
  PRIMARY KEY(operation_id,kind,resource_id)
 ) STRICT;
-CREATE INDEX IF NOT EXISTS iac_native_dependency_resource ON iac_native_dependencies(kind,resource_id);";
+CREATE INDEX IF NOT EXISTS iac_native_dependency_resource ON iac_native_dependencies(kind,resource_id);
+CREATE TABLE IF NOT EXISTS iac_resource_plans (
+ operation_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, definition TEXT NOT NULL, receipt TEXT
+) STRICT;
+CREATE TRIGGER IF NOT EXISTS iac_plan_native_identity BEFORE INSERT ON iac_native_operations
+ WHEN EXISTS(SELECT 1 FROM iac_resource_plans WHERE operation_id=NEW.operation_id)
+ AND json_extract(NEW.status,'$.action')<>'apply_resource_plan'
+ BEGIN SELECT RAISE(ABORT,'iac_operation_identity_conflict'); END;
+CREATE TRIGGER IF NOT EXISTS iac_native_plan_identity BEFORE INSERT ON iac_resource_plans
+ WHEN EXISTS(SELECT 1 FROM iac_native_operations WHERE operation_id=NEW.operation_id)
+ BEGIN SELECT RAISE(ABORT,'iac_operation_identity_conflict'); END;";
 
 /// A delayed request cannot advance a newer uncertain attempt after another recovery already failed.
 pub(super) fn check_recovery_attempt(
@@ -84,6 +94,13 @@ pub(super) fn read(
             |row| row.get(0),
         )
         .optional()?;
+    if raw.is_none()
+        && conn
+            .prepare("SELECT 1 FROM iac_resource_plans WHERE operation_id=?1")?
+            .exists([id.to_string()])?
+    {
+        return Err(PersistenceError::IacOperationIdentity);
+    }
     raw.map(|raw| serde_json::from_str(&raw).map_err(|_| PersistenceError::IacOperationIdentity))
         .transpose()
 }

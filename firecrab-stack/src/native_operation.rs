@@ -8,6 +8,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Atomically commit a reviewed persistent-resource configuration plan.
+    ApplyResourcePlan,
     /// Install one original package into its immutable image alias version.
     InstallImage,
     /// Select a new immutable image version using the original verified kernel.
