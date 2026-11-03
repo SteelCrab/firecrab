@@ -21,6 +21,9 @@ Without `--expected-plan`, the CLI requests a fresh plan immediately before appl
 With `--expected-plan`, the server rejects changes to the declaration, ownership, selected template content or observed host configuration with `409 stale_stack_plan`.
 Plan `inputs.templates` contains exact installed version, kernel, rootfs, optional initrd and boot-argument hashes.
 `inputs.serviceDigests` contains declared OCI digest identities.
+`inputs.serviceSecrets` contains exact borrowed Secret UUIDs, vault versions and
+ownership generations. [Deployment credentials](iac-stack-credentials.md) remain
+encrypted and are frozen before admission.
 An explicit VM `templatePin` selects that exact installed version even if the alias is later repointed.
 Without it, alias resolution is covered by the reviewed plan fingerprint.
 Changed artifact bytes reject apply before resource mutation with `stack_template_changed`.
@@ -50,6 +53,10 @@ The first version supports these operations:
 Standalone VM lifecycle is outside this schema. A newly created VM remains stopped until explicitly started.
 Service replicas use the existing deployment controller and its image, capacity, port and policy checks.
 Service deployment success requires the exact accepted deployment ID to reach `running` with healthy replicas.
+Initial and rolling deployments retain the same deterministic child UUID for one
+Stack apply and service. A retry reads that original attempt before selecting a
+deployment strategy or stopping replicas. Different inputs or parent authority
+cannot reuse it. A failed original attempt is not replaced by another deployment.
 Matching configuration alone does not repair an unhealthy service.
 
 ## Interrupting existing workloads

@@ -2,6 +2,73 @@ use super::*;
 use crate::templates::{TemplateSpec, TemplateVersion};
 use std::{path::Path, sync::Arc};
 
+#[tokio::test]
+async fn iac_stack_secret_plan_pins_metadata_and_rejects_rotation_before_any_effect() {
+    use crate::secrets::{Secret, SecretSummary};
+    let root = tempfile::tempdir().unwrap();
+    let (router, state, calls) = fixture(root.path(), None).await;
+    let secret = Uuid::new_v4();
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets.push(Secret {
+                summary: SecretSummary {
+                    id: secret,
+                    name: "original-secret".into(),
+                    description: String::new(),
+                    version: 1,
+                    created_at: 0,
+                    updated_at: 0,
+                    source: None,
+                },
+                value: "DO-NOT-PRINT-original-secret-value".into(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    let mut stack = declaration();
+    stack["microServices"] = json!({"web":{"network":"app","hostPort":30100,"config":{"name":"web","image":format!("ghcr.io/team/app@sha256:{}","a".repeat(64)),
+        "port":8080,"ram":128,"cpu":1,"secrets":{"TOKEN":secret}}}});
+    let (code, plan) = request(&router, "POST", "/api/stacks/demo/plan", stack.clone()).await;
+    assert_eq!(code, StatusCode::OK, "{plan}");
+    assert_eq!(
+        plan["inputs"]["serviceSecrets"]["web"]["TOKEN"]["version"],
+        1
+    );
+    assert_eq!(
+        plan["inputs"]["serviceSecrets"]["web"]["TOKEN"]["ownership"]["resource"]["id"],
+        secret.to_string()
+    );
+    assert!(!plan.to_string().contains("DO-NOT-PRINT"));
+    let operation = Uuid::new_v4();
+    let body = json!({"stack":stack,"operationId":operation,"expectedFingerprint":plan["fingerprint"],"allowStop":false});
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets[0].summary.version += 1;
+            contents.secrets[0].value = "DO-NOT-PRINT-new-secret-value".into();
+            Ok(())
+        })
+        .unwrap();
+    let (code, error) = request(&router, "POST", "/api/stacks/demo/apply", body.clone()).await;
+    assert_eq!(code, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["error"]["code"], "stale_stack_plan");
+    assert!(!error.to_string().contains("DO-NOT-PRINT"));
+    assert!(calls.lock().unwrap().is_empty());
+    assert!(state.store.list_micro_services().unwrap().is_empty());
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    assert!(state.store.stored_stack_apply(operation).unwrap().is_none());
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets.clear();
+            Ok(())
+        })
+        .unwrap();
+    let (code, error) = request(&router, "POST", "/api/stacks/demo/plan", stack).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "{error}");
+}
+
 fn install(state: &AppState, root: &Path, version: &str, boot: &str) -> Arc<TemplateVersion> {
     std::fs::write(
         root.join(format!("kernel-{version}")),

@@ -3,6 +3,9 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::ResourceOwnership;
 
 /// Exact installed template content, independent of a mutable alias.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -65,4 +68,22 @@ pub struct PlanInputs {
     /// Logical service key to the declared OCI digest, without registry credentials.
     #[serde(default)]
     pub service_digests: BTreeMap<String, String>,
+    /// Logical service and environment names to their exact borrowed Secret versions.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub service_secrets: BTreeMap<String, BTreeMap<String, SecretInputPin>>,
+    /// Original Secret versions of the observed service releases, when proven.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub service_secret_releases: BTreeMap<String, BTreeMap<String, SecretInputPin>>,
+}
+
+/// Non-secret proof of an existing Secret on the selected endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SecretInputPin {
+    /// Exact local Secret UUID; names never resolve a credential reference.
+    pub id: Uuid,
+    /// Encrypted vault version observed before deployment admission.
+    pub version: u64,
+    /// Borrowed reference authority, including its retained generation.
+    pub ownership: ResourceOwnership,
 }

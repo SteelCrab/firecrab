@@ -150,12 +150,13 @@ pub async fn plan(
         ));
     }
     firecrab_stack::validate(&stack).map_err(|errors| validation_errors(errors, request_id.0))?;
+    let desired = stack.clone();
     let (record, inventory) = database(request_id.0, move || {
         let record = state
             .store
             .stack(&name)?
             .ok_or(PersistenceError::MissingStack)?;
-        let inventory = inventory(&state.store, &state.templates)?;
+        let inventory = inventory_for(&state, &desired)?;
         Ok((record, inventory))
     })
     .await?;
@@ -210,7 +211,16 @@ pub(crate) fn inventory(
         networks: store.list_micro_networks()?,
         vms,
         services,
+        secret_inputs: Default::default(),
+        deployment_secret_inputs: Default::default(),
     })
+}
+
+pub(crate) fn inventory_for(
+    state: &AppState,
+    stack: &Stack,
+) -> Result<Inventory, PersistenceError> {
+    crate::service_runtime::secrets::stack::with_inventory(state, stack, Ok)
 }
 
 pub(super) fn validate_name(name: &str, request_id: Uuid) -> Result<(), AppError> {

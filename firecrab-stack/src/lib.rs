@@ -20,7 +20,7 @@ mod source;
 pub use apply::{
     ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, StepState, desired_hash,
 };
-pub use inputs::{PlanInputs, TemplatePin, TemplateSnapshot};
+pub use inputs::{PlanInputs, SecretInputPin, TemplatePin, TemplateSnapshot};
 pub use lifecycle::{LifecyclePolicy, VmDiskIdentity};
 pub use native_operation::{
     NativeAction, NativeOperation, NativeOperationState, NativeOperationsPage,

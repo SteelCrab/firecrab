@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Freeze Stack service Secret versions and borrowed authority before admission.
+  Keep original values encrypted, bind them to the accepted parent and child,
+  preserve them after rotation or restart, and fence recapture after cleanup.
+
 - Retain one original service deployment identity per Stack apply, including
   initial deployments. Recover its acknowledgement before choosing a replacement
   strategy, and reject changed inputs or a different parent authority.

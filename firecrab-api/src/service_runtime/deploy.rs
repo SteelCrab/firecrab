@@ -360,7 +360,12 @@ async fn accept(
     }
     validate_database_bindings(&state, id, request.0)?;
     require_image_auth(&state, &body.spec.image, request.0).await?;
-    secrets::preflight(&state, &body.spec, request.0).await?;
+    if let Writer::Stack(Some(apply)) = &writer {
+        secrets::stack::preflight(&state, *apply, id, body.operation_id, &body.spec, request.0)
+            .await?;
+    } else {
+        secrets::preflight(&state, &body.spec, request.0).await?;
+    }
     crate::handlers::pipe_storage::validate_binding(&state, &body.spec, request.0).await?;
     crate::queues::validate_bindings(&state, &body.spec, request.0).await?;
     let mut placement = previous.request.clone();

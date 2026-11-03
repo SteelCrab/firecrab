@@ -184,7 +184,7 @@ async fn run_steps(
     let id = status.operation_id;
     status.state = ApplyState::Running;
     save(state, status).await?;
-    let current = observe(state, id).await?;
+    let current = observe(state, observed, id).await?;
     if firecrab_stack::fingerprint(stack, record, observed)
         != firecrab_stack::fingerprint(stack, record, &current)
     {
@@ -208,7 +208,7 @@ async fn run_steps(
                 stack,
                 record,
                 observed,
-                &observe(state, id).await?,
+                &observe(state, observed, id).await?,
                 change,
                 id,
             )?;
@@ -771,10 +771,19 @@ fn exact_id(change: &Change, id: Uuid) -> Result<Uuid, AppError> {
     })
 }
 
-async fn observe(state: &AppState, id: Uuid) -> Result<Inventory, AppError> {
+async fn observe(state: &AppState, original: &Inventory, id: Uuid) -> Result<Inventory, AppError> {
     let store = state.store.clone();
     let templates = state.templates.clone();
-    database(id, move || inventory(&store, &templates)).await
+    let secret_inputs = original.secret_inputs.clone();
+    let deployment_secret_inputs = original.deployment_secret_inputs.clone();
+    database(id, move || {
+        let mut current = inventory(&store, &templates)?;
+        // Accepted work uses the original private credential snapshots, even after rotation.
+        current.secret_inputs = secret_inputs;
+        current.deployment_secret_inputs = deployment_secret_inputs;
+        Ok(current)
+    })
+    .await
 }
 
 async fn save(state: &AppState, status: &ApplyStatus) -> Result<(), AppError> {
@@ -823,6 +832,8 @@ fn verify_current(
     }
     let select = |inventory: &Inventory| Inventory {
         templates: inventory.templates.clone(),
+        secret_inputs: inventory.secret_inputs.clone(),
+        deployment_secret_inputs: inventory.deployment_secret_inputs.clone(),
         networks: inventory
             .networks
             .iter()

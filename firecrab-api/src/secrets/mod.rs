@@ -257,6 +257,10 @@ pub(crate) struct Contents {
     /// Immutable Secret environments for deployments, never returned by the API.
     #[serde(default)]
     pub service_environments: BTreeMap<Uuid, BTreeMap<String, String>>,
+    /// Original Stack deployment inputs, including cleared tombstones after cleanup.
+    #[serde(default)]
+    pub stack_service_credentials:
+        BTreeMap<Uuid, crate::service_runtime::secrets::stack::StackServiceCredentials>,
     /// Version-pinned controller credentials, retained for durable cross-host retries.
     #[serde(default)]
     pub cluster_credentials: BTreeMap<String, ClusterCredentials>,

@@ -8,7 +8,7 @@ use firecrab_stack::{
 };
 use uuid::Uuid;
 
-use super::stacks::{database, inventory, validate_name, validation_errors};
+use super::stacks::{database, inventory, inventory_for, validate_name, validation_errors};
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::persistence::PersistenceError;
@@ -70,15 +70,10 @@ pub(crate) async fn admit(
     let id = request.operation_id;
     let hash = firecrab_stack::desired_hash(&request.stack);
     let store = state.store.clone();
-    let templates = state.templates.clone();
     let name = request.stack.name.clone();
-    let (record, observed, previous) = database(id, move || {
+    let (record, previous) = database(id, move || {
         let record = store.stack(&name)?.ok_or(PersistenceError::MissingStack)?;
-        Ok((
-            record,
-            inventory(&store, &templates)?,
-            store.stored_stack_apply(id)?,
-        ))
+        Ok((record, store.stored_stack_apply(id)?))
     })
     .await?;
     if let Some(previous) = previous {
@@ -95,6 +90,9 @@ pub(crate) async fn admit(
         }
         return Ok(previous.status);
     }
+    let observation_state = state.clone();
+    let desired = request.stack.clone();
+    let observed = database(id, move || inventory_for(&observation_state, &desired)).await?;
     let mut plan = firecrab_stack::plan(&request.stack, &record, &observed)
         .map_err(|e| validation_errors(e, id))?;
     if request.expected_fingerprint.len() != 64
@@ -139,27 +137,42 @@ pub(crate) async fn admit(
         changes: steps,
         error: None,
     };
+    let credential_state = state.clone();
+    let desired = request.stack.clone();
+    let credential_status = status.clone();
+    database(id, move || {
+        crate::service_runtime::secrets::stack::prepare(
+            &credential_state,
+            &desired,
+            &credential_status,
+        )
+    })
+    .await?;
     let store = state.store.clone();
     let expected = record.clone();
     let queued = status.clone();
     let services = state.service_mutations.lock().await;
     // A tag observation can enter Deploy while preflight is reading host state.
     // Recheck the approved inventory under the same service admission lock.
-    let templates = state.templates.clone();
+    let admission_state = state.clone();
     let desired = request.stack.clone();
     let fingerprint = request.expected_fingerprint.clone();
     let (status, fresh) = database(id, move || {
-        if firecrab_stack::fingerprint(&desired, &expected, &inventory(&store, &templates)?)
-            != fingerprint
-        {
-            return Err(crate::persistence::PersistenceError::StaleStackPlan);
-        }
-        store.begin_stack_apply(
-            &expected,
-            &hash,
-            request.allow_stop,
-            &queued,
-            source.as_ref(),
+        crate::service_runtime::secrets::stack::with_inventory(
+            &admission_state,
+            &desired,
+            |current| {
+                if firecrab_stack::fingerprint(&desired, &expected, &current) != fingerprint {
+                    return Err(crate::persistence::PersistenceError::StaleStackPlan);
+                }
+                store.begin_stack_apply(
+                    &expected,
+                    &hash,
+                    request.allow_stop,
+                    &queued,
+                    source.as_ref(),
+                )
+            },
         )
     })
     .await?;

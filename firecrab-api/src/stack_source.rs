@@ -11,7 +11,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, de::DeserializeOwned};
 
 use crate::error::AppError;
-use crate::handlers::stacks::{database, inventory};
+use crate::handlers::stacks::{database, inventory_for};
 use crate::persistence::{PersistenceError, SourceTrigger};
 use crate::pipe_auth::SavedAuth;
 use crate::state::AppState;
@@ -246,7 +246,8 @@ async fn inspect(
     }
     check.desired_hash = Some(firecrab_stack::desired_hash(&stack));
     let store = state.store.clone();
-    let templates = state.templates.clone();
+    let observation_state = state.clone();
+    let desired = stack.clone();
     let name = source.name.clone();
     let expected_id = source.stack_id;
     let (record, observed) = database(check.id, move || {
@@ -254,7 +255,7 @@ async fn inspect(
             .stack(&name)?
             .filter(|r| r.id == expected_id)
             .ok_or(PersistenceError::MissingStack)?;
-        Ok((record, inventory(&store, &templates)?))
+        Ok((record, inventory_for(&observation_state, &desired)?))
     })
     .await
     .map_err(|_| "inventory_unavailable")?;

@@ -15,6 +15,118 @@ const VM: Uuid = Uuid::from_u128(2);
 const SERVICE: Uuid = Uuid::from_u128(3);
 
 #[test]
+fn secret_versions_are_required_redacted_and_detect_release_rotation() {
+    use firecrab_stack::{ManagedResource, ResourceOwnership, SecretInputPin};
+    let (mut stack, record, mut inventory) = fixture();
+    let secret = Uuid::new_v4();
+    let key = stack.micro_services.keys().next().unwrap().clone();
+    stack
+        .micro_services
+        .get_mut(&key)
+        .unwrap()
+        .config
+        .secrets
+        .insert("TOKEN".into(), secret);
+    inventory.services[0]
+        .service
+        .spec
+        .secrets
+        .insert("TOKEN".into(), secret);
+    inventory.services[0]
+        .deployment
+        .as_mut()
+        .unwrap()
+        .spec
+        .secrets
+        .insert("TOKEN".into(), secret);
+    let rejected = plan(&stack, &record, &inventory).unwrap_err();
+    assert!(
+        rejected
+            .iter()
+            .any(|error| error.path.ends_with(".secrets.TOKEN"))
+    );
+    let pin = SecretInputPin {
+        id: secret,
+        version: 1,
+        ownership: ResourceOwnership {
+            endpoint_id: Uuid::new_v4(),
+            resource: ManagedResource {
+                kind: "secret".into(),
+                id: secret.to_string(),
+            },
+            generation: 0,
+            owner: None,
+        },
+    };
+    inventory.secret_inputs.insert(secret, pin.clone());
+    let unknown = plan(&stack, &record, &inventory).unwrap();
+    assert!(
+        unknown
+            .changes
+            .iter()
+            .any(|change| change.kind == ResourceKind::Service
+                && change.action == Action::Deploy
+                && change.fields.contains(&"secretVersions".into()))
+    );
+    let deployment = inventory.services[0].deployment.as_ref().unwrap().id;
+    inventory.deployment_secret_inputs.insert(
+        deployment,
+        std::collections::BTreeMap::from([("TOKEN".into(), pin)]),
+    );
+    let original = plan(&stack, &record, &inventory).unwrap();
+    assert_eq!(
+        original
+            .changes
+            .iter()
+            .find(|change| change.kind == ResourceKind::Service)
+            .unwrap()
+            .action,
+        Action::Noop
+    );
+    inventory
+        .secret_inputs
+        .get_mut(&secret)
+        .unwrap()
+        .ownership
+        .generation += 1;
+    let transferred = plan(&stack, &record, &inventory).unwrap();
+    assert_ne!(original.fingerprint, transferred.fingerprint);
+    assert_eq!(
+        transferred
+            .changes
+            .iter()
+            .find(|change| change.kind == ResourceKind::Service)
+            .unwrap()
+            .action,
+        Action::Noop
+    );
+    inventory.secret_inputs.get_mut(&secret).unwrap().version += 1;
+    let rotated = plan(&stack, &record, &inventory).unwrap();
+    assert_ne!(rotated.fingerprint, transferred.fingerprint);
+    assert_eq!(
+        rotated
+            .changes
+            .iter()
+            .find(|change| change.kind == ResourceKind::Service)
+            .unwrap()
+            .action,
+        Action::Deploy
+    );
+    assert_eq!(rotated.inputs.service_secrets[&key]["TOKEN"].version, 2);
+    assert_eq!(
+        rotated.inputs.service_secret_releases[&key]["TOKEN"].version,
+        1
+    );
+}
+
+#[test]
+fn legacy_empty_plan_inputs_keep_their_exact_wire_shape() {
+    let legacy = r#"{"templates":{},"serviceDigests":{}}"#;
+    let inputs: firecrab_stack::PlanInputs = serde_json::from_str(legacy).unwrap();
+    assert_eq!(serde_json::to_string(&inputs).unwrap(), legacy);
+}
+
+#[test]
 fn human_and_json_action_names_match() {
     for action in [
         Action::Create,
@@ -175,6 +287,8 @@ fn fixture() -> (Stack, StackRecord, Inventory) {
         networks: vec![serde_json::from_value(json!({"id":NETWORK,"name":"demo-app","subnetCidr":"172.31.20.0/24","gateway":"172.31.20.1","internetEnabled":true})).unwrap()],
         vms: vec![vm],
         services: vec![ServiceSnapshot { service: MicroServiceResponse { id: SERVICE, spec: service.config.clone() }, deployment: Some(deployment) }],
+        secret_inputs: Default::default(),
+        deployment_secret_inputs: Default::default(),
     };
     (stack, record, inventory)
 }

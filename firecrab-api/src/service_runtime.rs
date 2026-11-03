@@ -115,7 +115,17 @@ async fn deploy_with_id(
     crate::queues::placement(&state, &service.spec, &mut request, request_id.0)?;
     validate_placement(&state, &service.spec, &request, request_id.0).await?;
     crate::handlers::pipe_storage::validate_binding(&state, &service.spec, request_id.0).await?;
-    if controller_credentials {
+    if let Some(apply) = operation {
+        secrets::stack::preflight(
+            &state,
+            apply,
+            id,
+            deployment_id,
+            &service.spec,
+            request_id.0,
+        )
+        .await?;
+    } else if controller_credentials {
         secrets::preflight_reserved(&state, &service.spec, deployment_id, request_id.0).await?;
     } else {
         secrets::preflight(&state, &service.spec, request_id.0).await?;
