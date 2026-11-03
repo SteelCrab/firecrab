@@ -2528,3 +2528,89 @@ test("a changed file asks for reload", async (t) => {
     "파일이 바뀌었습니다. 다시 불러온 뒤 다시 다듬어 주세요.",
   );
 });
+
+for (const [width, height] of [
+  [1440, 760],
+  [390, 760],
+])
+  test(`AI Sandbox pages never scroll the window below the app at ${width}px`, async (t) => {
+    const { page, state } = await setup(t, { width, view: "board" });
+    await page.setViewportSize({ width, height });
+    state.search = {
+      query: "skill",
+      count: 40,
+      skills: Array.from({ length: 40 }, (_, i) => ({
+        name: `skill-${i}`,
+        skill: `skill-${i}`,
+        source: "owner/repo",
+        installs: i,
+      })),
+    };
+    // When the window can scroll, name the elements that reach below it. An
+    // absolutely positioned element escapes scroll boxes that are not positioned.
+    const overflow = () =>
+      page.evaluate(() => {
+        const gap = document.scrollingElement.scrollHeight - window.innerHeight;
+        if (gap <= 0) return null;
+        const below = [...document.querySelectorAll("body *")]
+          .filter((e) => e.getBoundingClientRect().bottom > window.innerHeight)
+          .filter((e) => getComputedStyle(e).position === "absolute")
+          .slice(0, 4)
+          .map(
+            (e) => `${e.tagName.toLowerCase()}.${[...e.classList].join(".")}`,
+          );
+        return { gap, below };
+      });
+    const sidebar = page.locator(".am-quick-sidebar");
+    for (const name of [
+      "Workspace",
+      "Connect accounts",
+      "AI tasks",
+      "AGENTS.md rules",
+      "Skill store",
+      "Settings",
+    ]) {
+      await sidebar.getByRole("button", { name, exact: true }).click();
+      if (name === "Skill store") {
+        await page
+          .getByRole("searchbox", { name: "Search skills.sh" })
+          .fill("skill");
+        await page.getByRole("button", { name: "Search", exact: true }).click();
+        await expect(page.getByText("40 results")).toBeVisible();
+      }
+      await page.waitForTimeout(300);
+      assert.equal(JSON.stringify(await overflow()), "null", name);
+    }
+  });
+
+for (const [width, height] of [
+  [1440, 900],
+  [1100, 740],
+])
+  test(`terminal text keeps its padding on every side at ${width}px`, async (t) => {
+    const { page } = await setup(t);
+    await page.setViewportSize({ width, height });
+    const session = await openTerminals(page);
+    await page.waitForTimeout(600);
+    // xterm's fit addon measures the parent's border box and subtracts only
+    // the .xterm element's own padding. Padding on the parent is not removed,
+    // so the text grid grows past it and the right and bottom edges are cut.
+    const gaps = await session
+      .first()
+      .locator(".am-terminal")
+      .evaluate((box) => {
+        const outer = box.getBoundingClientRect();
+        const text = box.querySelector(".xterm-screen").getBoundingClientRect();
+        return {
+          left: text.left - outer.left,
+          top: text.top - outer.top,
+          right: outer.right - text.right,
+          bottom: outer.bottom - text.bottom,
+        };
+      });
+    const message = JSON.stringify(gaps);
+    assert.ok(gaps.left >= 12, message);
+    assert.ok(gaps.top >= 12, message);
+    assert.ok(gaps.right >= gaps.left - 1, message);
+    assert.ok(gaps.bottom >= gaps.top - 1, message);
+  });
