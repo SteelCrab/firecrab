@@ -90,3 +90,13 @@ UUID collisions remain rejected.
 
 Tests and CI were skipped at the user's request. Real import, restore, interruption,
 restart and multi-user acceptance remain open.
+
+## Import recovery status
+
+`import-status` reads incomplete import identities and their journaled phase without
+a running controller or the transferred package. An explicit operation UUID can read
+a completed receipt. It does not mutate the journal or prove staged-file integrity.
+A completed identical import retry can return its stored receipt if the transfer
+directory is gone; existing directories must still match the recorded manifest hash.
+Destination preflight now reports a previously started VM as ineligible, matching
+import admission. Tests, CI and live-host execution remain deferred.

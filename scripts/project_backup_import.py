@@ -431,14 +431,21 @@ def run_import(args, io):
             if not required.issubset(tables):
                 raise ValueError("Initialize the destination once with the updated controller, then stop it before import")
             source = Path(args.directory).absolute()
-            m = io.manifest_at(source)
-            c = m["checkpoint"]
-            request = dict(manifestSha256=io.digest(source / "manifest.json"), vm=args.vm, storage=args.storage, volumeName=args.volume_name, control=str(control))
             previous = db.execute("SELECT project_id,phase,document FROM project_workspace_imports WHERE id=?", (args.operation,)).fetchone()
+            fixed = dict(vm=args.vm, storage=args.storage, volumeName=args.volume_name, control=str(control))
             if previous:
                 record = json.loads(previous[2])
                 if (record["project"], record["phase"]) != previous[:2] or record["id"] != args.operation:
                     raise ValueError("Import journal identity or phase is inconsistent")
+                if any(record["request"].get(key) != value for key, value in fixed.items()):
+                    raise ValueError("Import operation has another immutable request")
+                if record["phase"] == "complete" and not os.path.lexists(source):
+                    print(encode(dict(status="complete", operationId=args.operation, projectId=record["project"], generation=record["generation"])))
+                    return
+            m = io.manifest_at(source)
+            c = m["checkpoint"]
+            request = dict(manifestSha256=io.digest(source / "manifest.json"), **fixed)
+            if previous:
                 if record["request"] != request:
                     raise ValueError("Import operation has another immutable request")
                 if record["phase"] == "complete":

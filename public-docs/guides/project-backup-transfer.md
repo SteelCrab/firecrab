@@ -161,15 +161,29 @@ The original control snapshot remains available as private recovery evidence.
 ## Resume an interrupted import
 
 The controller refuses startup while an import is `staging` or `prepared`. This
-prevents serving a partly installed DB/volume pair. Keep it stopped. Restore missing
-storage access, permissions or free space, then rerun the identical command with the
-same operation UUID, checkpoint package, VM, pool and volume name.
+prevents serving a partly installed DB/volume pair. Keep it stopped. List incomplete
+operations without the transfer package or a running controller:
+
+```sh
+python3 scripts/project-backup-transfer.py import-status \
+  --destination-control /private/destination/control.db
+```
+
+Use `--operation IMPORT_OPERATION_UUID` to read one incomplete or completed receipt.
+The response exposes operation/resource IDs and phase, not private file contents or
+credentials. It reports journal state only; it does not verify the staged files or
+stop a running controller. Restore missing storage access, permissions or free space,
+then rerun the identical import command with the same operation UUID, checkpoint
+package, VM, pool and volume name.
 
 - `staging`: prepare new private copies. Earlier partial files remain for inspection.
 - `prepared`: verify every installed/staged file against the retained plan. Publish
   only missing members, then retry the single registration transaction.
 - `complete`: return the retained receipt. Do not rewrite the live DB, disk or later
-  changes. Keep the original manifest available for retry identity matching.
+  changes. If the original transfer directory no longer exists, an identical retry
+  can return the receipt without reading it. If the directory still exists, its
+  manifest must match. `import-status` can also read the completed receipt without
+  the package or the original command arguments.
 
 Changing the registered pool path, filesystem identity, immutable request or prepared
 bytes fails closed. A different import cannot bypass an incomplete operation. Do not

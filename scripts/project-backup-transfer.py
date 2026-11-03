@@ -219,12 +219,12 @@ def destination_plan(args):
         pending_files = project_db.execute("SELECT count(*) FROM file_operations WHERE state='pending'").fetchone()[0] if "file_operations" in tables else 0
         busy_tasks = project_db.execute("SELECT count(*) FROM ai_sandbox_task_index WHERE busy=1").fetchone()[0] if "ai_sandbox_task_index" in tables else 0
     with connect(Path(args.destination_control)) as target:
-        vm = target.execute("SELECT state,purpose FROM vms WHERE id=?", (args.vm,)).fetchone()
+        vm = target.execute("SELECT state,purpose,last_runtime_id FROM vms WHERE id=?", (args.vm,)).fetchone()
         if not vm:
             raise ValueError("Destination VM does not exist")
         conflicts = []
-        if vm[0] not in ("created", "stopped") or vm[1] != "instance":
-            conflicts.append("Destination VM must be a stopped user VM")
+        if vm != ("created", "instance", None):
+            conflicts.append("Destination VM must be a never-started Created user VM")
         if target.execute("SELECT EXISTS(SELECT 1 FROM ai_sandbox_projects WHERE id=? OR vm_id=?)", (project, args.vm)).fetchone()[0]:
             conflicts.append("Project ID or VM is already assigned")
         if target.execute("SELECT EXISTS(SELECT 1 FROM project_workspaces WHERE project_id=? OR database_id=? OR volume_id=? OR vm_id=?)", (project, database, volume, args.vm)).fetchone()[0]:
@@ -244,8 +244,39 @@ def destination_plan(args):
         "sourceTaskReservations": task_count, "sourceProjectRecords": counts,
         "conflicts": conflicts,
         "status": "inspection_only",
-        "remaining": ["Validate destination storage root and exclusive ownership", "Prove destination VM process is stopped", "Reconcile task catalog and session identities", "Implement journaled registration and matched DB/volume installation"],
+        "remaining": ["Import verifies registered storage and exclusive controller ownership", "Operator must quiesce the source and stop the destination controller", "Import validates task identities and installs the matched pair"],
     }))
+
+
+def import_status(args):
+    """Read durable import phases without opening any project or changing the journal."""
+    control = connect(Path(args.destination_control).absolute())
+    try:
+        if args.operation:
+            rows = control.execute("SELECT id,project_id,phase,document FROM project_workspace_imports WHERE id=?", (args.operation,)).fetchall()
+            if not rows:
+                raise ValueError("Import operation was not found")
+        else:
+            rows = control.execute("SELECT id,project_id,phase,document FROM project_workspace_imports WHERE phase!='complete' ORDER BY rowid DESC LIMIT 101").fetchall()
+            if len(rows) > 100:
+                raise ValueError("Too many incomplete imports; inspect the controller journal")
+        result = []
+        for operation, project, phase, raw in rows:
+            record = json.loads(raw)
+            if record.get("id") != operation or record.get("project") != project or record.get("phase") != phase or phase not in ("staging", "prepared", "complete"):
+                raise ValueError("Import journal identity or phase is inconsistent")
+            identifier(operation)
+            identifier(project)
+            checkpoint = identifier(record["checkpoint"])
+            result.append(dict(operationId=operation, projectId=project, checkpointId=checkpoint,
+                               phase=phase, generation=record["generation"],
+                               destinationVmId=record["request"]["vm"],
+                               destinationStorageId=record["request"]["storage"],
+                               volumeName=record["request"]["volumeName"],
+                               completedAt=record.get("completedAt")))
+        print(json.dumps({"imports": result, "inspectionOnly": True}))
+    finally:
+        control.close()
 
 
 def main():
@@ -264,6 +295,9 @@ def main():
     plan.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
     plan.add_argument("--vm", required=True, type=identifier, help="Existing destination user VM UUID")
     plan.add_argument("--volume-name", required=True, help="Proposed destination volume name")
+    status = commands.add_parser("import-status", help="Read incomplete imports or one saved import receipt")
+    status.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
+    status.add_argument("--operation", type=identifier, help="Exact import UUID; omit to list incomplete imports")
     receive = commands.add_parser("import", help="Install and register a fresh project while the destination controller is stopped")
     receive.add_argument("directory", help="Transferred matched checkpoint directory")
     receive.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
@@ -277,6 +311,8 @@ def main():
         export(args)
     elif args.command == "plan-import":
         destination_plan(args)
+    elif args.command == "import-status":
+        import_status(args)
     elif args.command == "import":
         from project_backup_import import run_import
         run_import(args, sys.modules[__name__])
