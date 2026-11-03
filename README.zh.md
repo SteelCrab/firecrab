@@ -14,7 +14,7 @@
 ██      ██ ██   ██ ███████  ██████ ██   ██ ██   ██ ██████
 ```
 
-<p align="center">可直接运行在自有服务器上的轻量 microVM 平台</p>
+<p align="center">在自有服务器上运行应用和 AI 智能体的开源 microVM 平台</p>
 
 <p align="center">
   <a href="./README.md">English</a> ·
@@ -31,7 +31,10 @@
 <details>
 <summary>目标</summary>
 
-在自己管理的单台 Linux 主机上创建和运行 Firecracker microVM，通过浏览器仪表盘、CLI 或 REST API 管理。适用于个人服务器、家庭实验室和开发环境。
+在自有服务器上创建和管理 Firecracker microVM。
+部署应用镜像，管理更新和回滚。
+在隔离的 MicroVM 环境中运行 AI 智能体。
+通过浏览器仪表盘、CLI 或 REST API 管理平台。
 
 </details>
 
@@ -39,6 +42,8 @@
 <summary>主要功能</summary>
 
 - **VM 管理** — 创建、启动、停止、删除 microVM，以及浏览器串行控制台。
+- **[应用部署](public-docs/guides/microservices.md)** — 部署 OCI 镜像、管理副本和健康检查，以及[更新或回滚](public-docs/guides/deploy.md)运行中的应用。
+- **[AI 智能体](public-docs/guides/ai-sandbox.md)** — 在隔离的 MicroVM 工作区中运行编程智能体和项目任务。
 - **镜像与磁盘** — M2Image 模板、OCI 镜像导入和 MicroStorage 磁盘位置配置。
 - **网络** — MicroNetwork 子网与每个 VM 的互联网访问或隔离策略。
 - **主机平台** — Linux 直接运行；macOS 和 Windows 使用 microManager（Windows 为 Preview）。

@@ -14,7 +14,7 @@
 ██      ██ ██   ██ ███████  ██████ ██   ██ ██   ██ ██████
 ```
 
-<p align="center">Platform microVM ringan untuk server pribadi Anda.</p>
+<p align="center">Platform microVM sumber terbuka untuk aplikasi dan agen AI di server Anda sendiri.</p>
 
 <p align="center">
   <a href="./README.md">English</a> ·
@@ -31,7 +31,10 @@
 <details>
 <summary>Tujuan</summary>
 
-Jalankan microVM Firecracker pada satu host Linux yang Anda kelola melalui dashboard browser, CLI, atau REST API. Cocok untuk server pribadi, homelab, dan lingkungan pengembangan.
+Buat dan kelola microVM Firecracker di server Anda sendiri.
+Deploy image aplikasi serta kelola pembaruan dan rollback.
+Jalankan agen AI dalam lingkungan MicroVM yang terisolasi.
+Kelola platform melalui dashboard browser, CLI, atau REST API.
 
 </details>
 
@@ -39,6 +42,8 @@ Jalankan microVM Firecracker pada satu host Linux yang Anda kelola melalui dashb
 <summary>Fitur utama</summary>
 
 - **VM** — buat, mulai, hentikan, dan hapus microVM; akses konsol serial di browser.
+- **[Deployment aplikasi](public-docs/guides/microservices.md)** — deploy image OCI, kelola replika dan pemeriksaan kesehatan, serta [perbarui atau rollback](public-docs/guides/deploy.md) aplikasi yang berjalan.
+- **[Agen AI](public-docs/guides/ai-sandbox.md)** — jalankan agen pemrograman dan tugas proyek dalam ruang kerja MicroVM yang terisolasi.
 - **Image dan disk** — template M2Image, impor image OCI, dan lokasi disk MicroStorage.
 - **Jaringan** — subnet MicroNetwork dan kebijakan internet atau isolasi per VM.
 - **Platform host** — langsung di Linux; melalui microManager di macOS dan Windows (Windows Preview).

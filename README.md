@@ -14,7 +14,7 @@
 ██      ██ ██   ██ ███████  ██████ ██   ██ ██   ██ ██████
 ```
 
-<p align="center">A lightweight microVM platform for your own server.</p>
+<p align="center">An open-source microVM platform for apps and AI agents on your own server.</p>
 
 <p align="center">
   <a href="./README.md">English</a> ·
@@ -33,7 +33,10 @@
 <details>
 <summary>Purpose</summary>
 
-Run Firecracker microVMs on one Linux host you control, managed through a browser dashboard, CLI, or REST API. Built for personal servers, homelabs, and development environments.
+Create and manage Firecracker microVMs on your own server.
+Deploy application images and manage updates and rollbacks.
+Run AI agents in isolated MicroVM environments.
+Manage the platform through a browser dashboard, CLI, or REST API.
 
 </details>
 
@@ -41,6 +44,8 @@ Run Firecracker microVMs on one Linux host you control, managed through a browse
 <summary>Key features</summary>
 
 - **VMs** — create, start, stop, and delete microVMs; access a browser serial console.
+- **[App deployment](public-docs/guides/microservices.md)** — deploy OCI images, manage replicas and health checks, and [update or roll back](public-docs/guides/deploy.md) running apps.
+- **[AI agents](public-docs/guides/ai-sandbox.md)** — run coding agents and project tasks in isolated MicroVM workspaces.
 - **Images and disks** — M2Image templates, OCI image imports, and MicroStorage disk locations.
 - **Networks** — MicroNetwork subnets and per-VM internet or isolated egress.
 - **Host platforms** — Linux directly; macOS and Windows through microManager (Windows Preview).

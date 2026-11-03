@@ -14,7 +14,7 @@
 ██      ██ ██   ██ ███████  ██████ ██   ██ ██   ██ ██████
 ```
 
-<p align="center">自分のサーバーですぐ使える軽量 microVM プラットフォーム</p>
+<p align="center">自分のサーバーでアプリと AI エージェントを実行するオープンソースの microVM プラットフォーム</p>
 
 <p align="center">
   <a href="./README.md">English</a> ·
@@ -31,7 +31,10 @@
 <details>
 <summary>目的</summary>
 
-自分で管理する Linux ホスト 1 台で Firecracker microVM を作成・運用します。ブラウザのダッシュボード・CLI・REST API で管理でき、個人サーバーやホームラボ、開発環境に適しています。
+自分のサーバーで Firecracker microVM を作成・管理します。
+アプリのイメージをデプロイし、更新とロールバックを管理します。
+AI エージェントは隔離された MicroVM 環境で実行します。
+ブラウザのダッシュボード・CLI・REST API でプラットフォームを管理します。
 
 </details>
 
@@ -39,6 +42,8 @@
 <summary>主な機能</summary>
 
 - **VM 管理** — microVM の作成・起動・停止・削除とブラウザのシリアルコンソール。
+- **[アプリのデプロイ](public-docs/guides/microservices.md)** — OCI イメージのデプロイ、レプリカとヘルスチェックの管理、実行中のアプリの[更新とロールバック](public-docs/guides/deploy.md)。
+- **[AI エージェント](public-docs/guides/ai-sandbox.md)** — 隔離された MicroVM ワークスペースでコーディングエージェントとプロジェクトタスクを実行。
 - **イメージとディスク** — M2Image テンプレート、OCI イメージのインポート、MicroStorage によるディスク配置。
 - **ネットワーク** — MicroNetwork サブネットと VM ごとのインターネット許可・隔離ポリシー。
 - **ホスト環境** — Linux では直接実行、macOS・Windows では microManager を使用（Windows は Preview）。

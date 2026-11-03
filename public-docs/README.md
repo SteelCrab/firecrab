@@ -1,6 +1,9 @@
 # Firecrab documentation
 
-Firecrab manages Firecracker microVMs on one host.
+Firecrab is an open-source microVM platform for apps and AI agents on your own server.
+Create and manage Firecracker microVMs.
+Deploy application images with [MicroService](guides/microservices.md) and manage [updates and rollbacks](guides/deploy.md).
+Run [AI agents](guides/ai-sandbox.md) in isolated MicroVM environments.
 Linux runs the services directly; macOS and Windows use managed Debian.
 
 ## Get started

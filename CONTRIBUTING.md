@@ -30,7 +30,9 @@ If life makes it hard to keep a PR going, the maintainer may pick up the work, p
 
 ## What firecrab is
 
-firecrab is a single-host microVM manager built on Firecracker.
+firecrab is an open-source microVM platform for apps and AI agents on your own server.
+It uses Firecracker to run isolated microVMs.
+It manages application image deployments, updates, and rollbacks.
 It consists of an API, a network helper, a CLI, and a dashboard.
 The API keeps host privileges minimal; the helper handles network operations that need them.
 
