@@ -81,6 +81,15 @@ export type VmRepository = {
   state: "preparing" | "ready" | "failed" | "interrupted";
   error?: string | null;
 };
+/** One folder of the VM project, listed without following symlinks. */
+export type ProjectFolder = {
+  path: string;
+  entries: {
+    name: string;
+    kind: "directory" | "file" | "symlink" | "other";
+  }[];
+  truncated: boolean;
+};
 export type AgentTerminal = { agent: AgentSession; text: string };
 export type GitHubRepository = {
   name: string;

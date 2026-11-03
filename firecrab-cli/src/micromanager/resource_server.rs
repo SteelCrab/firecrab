@@ -187,6 +187,10 @@ fn router_with_registry(
                     post(setup_vm_project),
                 )
                 .route(
+                    "/api/service/agents/microvms/{vm}/project/files",
+                    get(vm_project_files),
+                )
+                .route(
                     "/api/service/agents/microvms/{vm}/tasks",
                     post(start_vm_agent_task),
                 )
@@ -483,6 +487,22 @@ async fn setup_vm_project(
     })
     .await
     .map_err(|e| Error::Invalid(e.to_string()))?
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FilesQuery {
+    #[serde(default)]
+    path: String,
+}
+async fn vm_project_files(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+    Query(query): Query<FilesQuery>,
+) -> Result<Json<serde_json::Value>, Error> {
+    blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?.project_files(&query.path)
+    })
+    .await
 }
 async fn prepare_vm_agents(
     State(controller): State<Arc<Controller>>,

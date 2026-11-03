@@ -161,6 +161,15 @@ async fn vm_agent_operations_reject_damaged_private_identity_without_falling_bac
             .boxed(),
         ),
         (
+            "project files",
+            vm_project_files(
+                state(),
+                RoutePath(vm),
+                Query(FilesQuery { path: "src".into() }),
+            )
+            .boxed(),
+        ),
+        (
             "prepare",
             prepare_vm_agents(state(), RoutePath(vm), cli()).boxed(),
         ),

@@ -160,6 +160,31 @@ async function setup(
   );
   state.refineError = null;
   state.applyError = null;
+  state.files = {
+    "": {
+      entries: [
+        { name: "docs", kind: "directory" },
+        { name: "src", kind: "directory" },
+        { name: "README.md", kind: "file" },
+        { name: "shared", kind: "symlink" },
+      ],
+      truncated: false,
+    },
+    src: {
+      entries: [
+        { name: "components", kind: "directory" },
+        { name: "main.ts", kind: "file" },
+      ],
+      truncated: false,
+    },
+    "src/components": {
+      entries: [{ name: "App.tsx", kind: "file" }],
+      truncated: true,
+    },
+    docs: { entries: [], truncated: false },
+  };
+  state.fileCalls = [];
+  state.filesGate = null;
   await page.routeWebSocket("**/agents/microvms/*/*/terminal?*", (socket) => {
     const url = new URL(socket.url());
     const parts = url.pathname.split("/");
@@ -342,6 +367,18 @@ async function setup(
               status: 400,
               json: { error: "MicroVM: codex timed out" },
             });
+      if (path === "/project/files") {
+        const folder = new URL(request.url()).searchParams.get("path") ?? "";
+        state.fileCalls.push(folder);
+        await state.filesGate;
+        const listing = state.files[folder];
+        if (!listing)
+          return route.fulfill({
+            status: 400,
+            json: { error: "This folder no longer exists." },
+          });
+        return route.fulfill({ json: { path: folder, ...listing } });
+      }
       if (path === "/project" && request.method() === "POST") {
         state.project = {
           vmId,
@@ -2004,6 +2041,209 @@ test("A failed VM connection keeps the source row and hides technical errors unt
     page.getByRole("textbox", { name: "Task", exact: true }),
   ).toHaveValue("Keep this task draft");
 });
+
+test("the task page browses the VM project folders read-only", async (t) => {
+  // The panel docks open beside the tasks from 1600px.
+  const { page, state } = await setup(t, { view: "board", width: 1600 });
+  const panel = page.getByRole("complementary", {
+    name: "Project files",
+    exact: true,
+  });
+  await expect(panel).toContainText("example/project");
+  await expect(panel).toContainText("main");
+  await expect(panel).toContainText("/workspace/firecrab/project");
+  const item = (name) => panel.getByRole("button", { name, exact: true });
+  await expect(item("src")).toHaveAttribute("aria-expanded", "false");
+  await expect(item("README.md")).toBeVisible();
+  assert.deepEqual(await panel.locator(".am-file-name").allTextContents(), [
+    "docs",
+    "src",
+    "README.md",
+    "shared",
+  ]);
+  // A symlink is listed but never opened as a folder.
+  await expect(item("shared")).not.toHaveAttribute("aria-expanded");
+  assert.deepEqual(state.fileCalls, [""]);
+
+  await item("src").click();
+  await expect(item("src")).toHaveAttribute("aria-expanded", "true");
+  await expect(item("main.ts")).toBeVisible();
+  assert.deepEqual(state.fileCalls, ["", "src"]);
+  await item("src").click();
+  await expect(item("main.ts")).toHaveCount(0);
+  await item("src").click();
+  await expect(item("main.ts")).toBeVisible();
+  assert.deepEqual(state.fileCalls, ["", "src"], "opened folders are cached");
+
+  await item("components").click();
+  await expect(item("App.tsx")).toBeVisible();
+  await expect(panel).toContainText("Some items are not shown.");
+  await item("docs").click();
+  await expect(panel).toContainText("This folder is empty.");
+
+  await item("main.ts").click();
+  await expect(item("main.ts")).toHaveAttribute("aria-current", "true");
+  await expect(item("README.md")).not.toHaveAttribute("aria-current");
+  await item("README.md").click();
+  await expect(item("README.md")).toHaveAttribute("aria-current", "true");
+  await expect(item("main.ts")).not.toHaveAttribute("aria-current");
+
+  // The tree follows the VM only when asked, never on the status poll.
+  state.files[""].entries.push({ name: "CHANGELOG.md", kind: "file" });
+  await page.waitForTimeout(3000);
+  await expect(item("CHANGELOG.md")).toHaveCount(0);
+  state.fileCalls.length = 0;
+  await panel
+    .getByRole("button", { name: "Refresh files", exact: true })
+    .click();
+  await expect(item("CHANGELOG.md")).toBeVisible();
+  assert.deepEqual([...state.fileCalls].sort(), [
+    "",
+    "docs",
+    "src",
+    "src/components",
+  ]);
+  await expect(item("README.md")).toHaveAttribute("aria-current", "true");
+  await expect(item("App.tsx")).toBeVisible();
+  assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
+});
+
+test("project folders show loading and error states", async (t) => {
+  const { page, state } = await setup(t, {
+    view: "board",
+    locale: "ko",
+    width: 1600,
+  });
+  const panel = page.getByRole("complementary", {
+    name: "프로젝트 파일",
+    exact: true,
+  });
+  const item = (name) => panel.getByRole("button", { name, exact: true });
+  await expect(item("src")).toBeVisible();
+  let release;
+  state.filesGate = new Promise((resolve) => (release = resolve));
+  await item("src").click();
+  await expect(panel.getByRole("status")).toHaveText(
+    "파일 목록을 불러오는 중…",
+  );
+  release();
+  state.filesGate = null;
+  await expect(item("main.ts")).toBeVisible();
+  await expect(panel.getByRole("status")).toHaveCount(0);
+
+  delete state.files.docs;
+  await item("docs").click();
+  await expect(panel.getByRole("alert")).toContainText(
+    "This folder no longer exists.",
+  );
+  await expect(item("main.ts")).toBeVisible();
+
+  delete state.files[""];
+  await panel
+    .getByRole("button", { name: "파일 새로고침", exact: true })
+    .click();
+  await expect(panel.getByRole("alert").first()).toContainText(
+    "파일 목록을 불러오지 못했어요.",
+  );
+  await expect(item("src")).toHaveCount(0);
+});
+
+for (const width of [1600, 1440, 1100, 390]) {
+  test(`the project folder panel keeps the task area usable at ${width}px`, async (t) => {
+    const { page, state } = await setup(t, {
+      width,
+      locale: width === 390 ? "ko" : "en",
+    });
+    await page.setViewportSize({ width, height: 760 });
+    const en = width !== 390;
+    state.files[""].entries.push(
+      ...Array.from({ length: 80 }, (_, i) => ({
+        name: `file-${String(i).padStart(2, "0")}.txt`,
+        kind: "file",
+      })),
+    );
+    const panel = page.getByRole("complementary", {
+      name: en ? "Project files" : "프로젝트 파일",
+      exact: true,
+    });
+    const show = panel.getByRole("button", {
+      name: en ? "Show project files" : "프로젝트 파일 보기",
+      exact: true,
+    });
+    const hide = panel.getByRole("button", {
+      name: en ? "Hide project files" : "프로젝트 파일 숨기기",
+      exact: true,
+    });
+    const list = panel.locator(".am-file-tree");
+    const workflow = page.locator(".am-workflow");
+    const fits = () =>
+      page.evaluate(() => ({
+        below: document.scrollingElement.scrollHeight - innerHeight,
+        right: document.documentElement.scrollWidth - innerWidth,
+      }));
+    const docked = width >= 1600;
+    if (width === 1440) {
+      // A saved open choice docks the panel only from 1600px.
+      await page.evaluate(() =>
+        localStorage.setItem("firecrab.agentFiles.open", "open"),
+      );
+      await page.reload();
+    }
+    if (docked) {
+      await expect(list).toBeVisible();
+      const side = await panel.boundingBox();
+      const work = await workflow.boundingBox();
+      assert(side.x + side.width <= work.x + 1, "the panel sits left of tasks");
+      assert(work.width >= 600, `tasks keep ${work.width}px`);
+      await page.reload();
+      await expect(list).toBeVisible();
+    } else {
+      // Smaller screens start with the panel closed to keep the tasks wide.
+      await expect(show).toBeVisible();
+      await expect(list).toBeHidden();
+      await show.click();
+      await expect(list).toBeVisible();
+    }
+    await expect(
+      panel.getByRole("button", { name: "file-79.txt", exact: true }),
+    ).toBeAttached();
+    assert(
+      await list.evaluate((el) => el.scrollHeight > el.clientHeight),
+      "the folder list scrolls inside its panel",
+    );
+    assert.deepEqual(await fits(), { below: 0, right: 0 });
+    await page.screenshot({
+      path: join(tmpdir(), `firecrab-agent-files-${width}.png`),
+      fullPage: false,
+    });
+    const before = await workflow.boundingBox();
+    await hide.click();
+    await expect(list).toBeHidden();
+    await expect(show).toBeVisible();
+    const after = await workflow.boundingBox();
+    assert(after.width >= before.width, "closing never narrows the tasks");
+    assert.deepEqual(await fits(), { below: 0, right: 0 });
+    if (docked) {
+      assert(after.width > before.width + 150);
+      await page.reload();
+      await expect(show).toBeVisible();
+      await expect(list).toBeHidden();
+    }
+    if (!docked && width > 700) {
+      // The panel over the tasks closes with Escape or a click beside it.
+      await show.click();
+      await expect(hide).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(list).toBeHidden();
+      await expect(show).toBeFocused();
+      await show.click();
+      await panel.getByRole("button", { name: "src", exact: true }).click();
+      await expect(list).toBeVisible();
+      await page.locator(".am-quick-sidebar h2").click();
+      await expect(list).toBeHidden();
+    }
+  });
+}
 
 for (const [width, locale] of [
   [1440, "en"],

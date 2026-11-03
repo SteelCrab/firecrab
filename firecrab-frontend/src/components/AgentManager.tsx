@@ -51,6 +51,7 @@ import AgentTaskForm from "./AgentTaskForm";
 import AgentTaskBoard from "./AgentTaskBoard";
 import AgentEnvironment from "./AgentEnvironment";
 import AgentRepository from "./AgentRepository";
+import AgentFileTree from "./AgentFileTree";
 import AgentAutomation from "./AgentAutomation";
 import AgentWorkspaceCreate from "./AgentWorkspaceCreate";
 import AgentSkillStore from "./AgentSkillStore";
@@ -692,6 +693,13 @@ function VmAgentWorkspace({
           )}
           {page === "skills" && (
             <AgentSkillStore vmId={vm?.id || ""} controllerId={controllerId} />
+          )}
+          {vm && page === "tasks" && status?.project?.state === "ready" && (
+            <AgentFileTree
+              key={`${vmId}:${status.project.repository}:${status.project.path}`}
+              vmId={vmId}
+              project={status.project}
+            />
           )}
           <div
             hidden={!vm || !["connections", "tasks"].includes(page)}

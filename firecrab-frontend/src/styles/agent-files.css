@@ -1,0 +1,244 @@
+/* The task page puts the project folder panel left of the tasks. */
+.am-quick-main.am-task-page {
+  display: flex;
+}
+.am-quick-main.am-task-page > .agent-manager {
+  flex: 1;
+  min-width: 0;
+}
+.am-files {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 44px;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+.am-files.is-open:not(.is-drawer) {
+  width: 228px;
+}
+.am-files-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-subtle);
+}
+/* Below 1600px the panel opens over the tasks instead of narrowing them. */
+.am-files.is-drawer .am-files-panel {
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 280px;
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+}
+.am-files-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 32px;
+  height: 32px;
+  margin: 12px auto 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  cursor: pointer;
+}
+.am-files-toggle svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+}
+.am-files-toggle span {
+  display: none;
+}
+.am-files-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 8px 4px 14px;
+}
+.am-files-head > svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--text-3);
+}
+.am-files-head strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.am-files-head .icon-btn {
+  flex: none;
+}
+.am-files-head .icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.am-files-meta {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 4px 14px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.am-files-meta > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.am-files-meta dt {
+  display: flex;
+  flex: none;
+  color: var(--text-3);
+}
+.am-files-meta dt svg {
+  width: 13px;
+  height: 13px;
+}
+.am-files-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.am-file-tree {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 6px 12px;
+  overflow: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+.am-file-tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.am-file-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 26px;
+  padding: 3px 8px 3px calc(4px + var(--depth, 0) * 14px);
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.am-file-row > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+}
+.am-file-row > .am-file-chevron {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.am-file-row[aria-expanded="true"] > .am-file-chevron {
+  transform: rotate(90deg);
+}
+.am-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.am-file-row[aria-current="true"] {
+  background: var(--bg-active);
+  color: var(--text);
+  font-weight: 500;
+}
+.am-file-row:focus-visible,
+.am-files-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.am-file-note {
+  padding: 4px 8px 4px calc(21px + var(--depth, 0) * 14px);
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.am-file-note p {
+  margin: 0;
+}
+.am-file-note.is-error {
+  color: var(--red-ink);
+  overflow-wrap: anywhere;
+}
+@media (hover: hover) and (pointer: fine) {
+  .am-file-row:hover,
+  .am-files-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .am-file-chevron {
+    transition: transform 120ms ease-out;
+  }
+}
+/* Phones stack the panel above the tasks as a bar that opens in place. */
+@media (max-width: 700px) {
+  .am-quick-main.am-task-page {
+    flex-direction: column;
+  }
+  .am-files,
+  .am-files.is-open:not(.is-drawer) {
+    width: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .am-files-toggle {
+    justify-content: flex-start;
+    width: 100%;
+    height: 44px;
+    margin: 0;
+    padding: 0 16px;
+    border-radius: 0;
+    color: var(--text-2);
+    font-size: 13px;
+  }
+  .am-files-toggle span {
+    display: inline;
+  }
+  .am-files-head {
+    padding: 12px 10px 4px 16px;
+  }
+  .am-files-meta {
+    padding: 4px 16px 10px;
+  }
+  .am-file-tree {
+    max-height: 320px;
+  }
+}

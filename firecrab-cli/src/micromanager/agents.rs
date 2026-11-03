@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 pub mod automation;
 pub mod editor;
+pub mod files;
 pub mod github;
 mod guest;
 mod models;
