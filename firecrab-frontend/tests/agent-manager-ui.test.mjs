@@ -1555,6 +1555,27 @@ test("GitHub authentication tools can be prepared before selecting any coding CL
   assert.equal(state.agents.length, 0);
 });
 
+test("a signed-in CLI starts tasks without a choice saved in this browser", async (t) => {
+  // The choice lives in localStorage, which another origin or a cleared
+  // browser does not have. The VM still reports which CLI is ready.
+  const { page } = await setup(t, { selectCli: false });
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "AI tasks", exact: true })
+    .click();
+  await expect(
+    page.getByText("Choose a coding CLI in Connect accounts to start coding."),
+  ).toHaveCount(0);
+  await expect(page.locator(".am-quick-notice")).toHaveCount(0);
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "Connect accounts", exact: true })
+    .click();
+  await expect(
+    page.getByRole("radio", { name: "Codex", exact: true }),
+  ).toBeChecked();
+});
+
 test("One VM repository is selected after AUTH and reused by new tasks", async (t) => {
   const { page, state } = await setup(t, { empty: true, project: false });
   await page
