@@ -14,6 +14,13 @@ for name in firecrab-api firecrab-helper firecrab; do
     printf '#!/bin/sh\nexit 0\n' >"$scratch/bin/$name"
     chmod +x "$scratch/bin/$name"
 done
+# This fixture predates native maintenance. Unknown commands must fail so the
+# installer does not mistake an unconditional exit-zero stub for that protocol.
+cat >"$scratch/bin/firecrab" <<'SH'
+#!/bin/sh
+if [ "${1:-}" = iac ]; then exit 2; fi
+exit 0
+SH
 cp "$engine/firecrab-ingress" "$scratch/bin/firecrab-ingress"
 cp -R "$engine/ingress" "$scratch/bin/ingress"
 if [ -x "$engine/firecrab-guest-console" ]; then

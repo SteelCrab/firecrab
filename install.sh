@@ -250,7 +250,9 @@ native_maintenance_begin() {
     operation=${FIRECRAB_NATIVE_MAINTENANCE_OPERATION_ID:-}
     input_hash=${FIRECRAB_NATIVE_MAINTENANCE_INPUT_SHA256:-}
     if [ -n "$operation" ] || [ -n "$input_hash" ]; then
-        [ -n "$operation" ] && [ -n "$input_hash" ] || die "incomplete parent native maintenance identity"
+        if [ -z "$operation" ] || [ -z "$input_hash" ]; then
+            die "incomplete parent native maintenance identity"
+        fi
         $SUDO env CONFDIR="$CONFDIR" UNITDIR="$UNITDIR" "$native_cli" iac native-maintenance-check \
             --operation-id "$operation" --action "$action" --input-sha256 "$input_hash" \
             || die "parent native maintenance does not authorize this installer step"
