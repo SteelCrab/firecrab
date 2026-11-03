@@ -145,3 +145,17 @@ missing files stop the operation. A committed project registration cannot be aba
 
 Tests and CI were skipped at the user's request. Real prepared-import interruption,
 abandonment, service restart and full #550 acceptance remain open.
+
+## Abandoned quarantine cleanup
+
+The offline `purge-abandoned` command previews an abandoned import's private
+quarantine file count and logical bytes. With explicit deletion confirmation it
+records bounded exact file identities, hashes and directory identities before
+unlinking. It rejects unknown entries, symlinks and hard links. Interrupted cleanup
+resumes the same plan. A completed receipt does not touch subsequently created files.
+The controller must be stopped, and the registered pool identity must still match.
+Live projects, volumes, VMs, transfer packages and backup catalogs are not cleanup
+targets. The command does not implement permanent deletion of a retained project.
+
+No cleanup was performed and no tests or CI were run for this implementation. Live
+interruption and service-user acceptance remain open in #550.

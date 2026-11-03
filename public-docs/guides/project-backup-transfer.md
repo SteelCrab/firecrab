@@ -223,7 +223,39 @@ remains blocked until every journaled move and the final receipt are complete. A
 completed abandonment has phase `complete` and outcome `abandoned` in `import-status`.
 The old import UUID cannot be resumed. Start a new import with a new UUID if needed.
 The quarantined evidence remains private and consumes storage until an operator
-handles it separately. This feature has not yet been tested on a live host.
+explicitly cleans it. This feature has not yet been tested on a live host.
+
+### Clean an abandoned import quarantine
+
+Only after an import is recorded as `abandoned`, an operator can inspect and explicitly
+remove its quarantine while the destination controller is stopped:
+
+```sh
+python3 scripts/project-backup-transfer.py purge-abandoned \
+  --destination-control /private/destination/control.db \
+  --operation IMPORT_OPERATION_UUID
+```
+
+Without confirmation this prints each quarantine role and relative filename, plus the
+number of files and logical bytes. A pending retry lists the original plan, including
+files already removed. The preview does not write a cleanup plan or delete data. It scans and hashes the private quarantine, so a
+large volume can make this step slow. The result is a preview, not a reservation.
+Review it, then repeat the command with `--confirm-delete` to permanently remove the
+listed quarantine files. The command never targets the source transfer, registered
+project DB, live volume, other projects, VM or retained backup catalog.
+
+Before the first deletion the controller records the exact file hashes and identities.
+It checks for unknown entries and changed identities, removes only recorded files,
+syncs each parent directory and removes only recorded empty directories. Interrupted
+cleanup can be resumed with the same operation and `--confirm-delete`. A completed
+receipt returns the saved result without touching newer files. `import-status` reports
+whether quarantine cleanup is pending or complete. Missing storage, changed files,
+symlinks, hard links or unknown entries stop cleanup for operator inspection.
+
+This is an irreversible cleanup of the abandoned quarantine. Keep any evidence that
+is still needed before confirming. The implementation has not been tested or exercised
+on a live host. Permanent deletion of an active retained project is a separate
+requirement and is not implemented by this command.
 
 Private `.project-import-IMPORT_OPERATION_UUID` staging directories remain beside
 project, backup and volume namespaces. Partial copies are outside live resource and

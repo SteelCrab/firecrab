@@ -124,7 +124,7 @@ editor bundle without this protocol cannot save after restoration.
 These are offline, host-local full copies. They are not online filesystem snapshots,
 a remote backup service, or process-memory restoration. Backups on the same host do
 not protect against losing that host. Preserve the controller registry, archives and
-storage pools with a separate host backup. The offline [transfer staging tool](project-backup-transfer.md) can copy and inspect a matched archive. Destination import is not yet implemented.
+storage pools with a separate host backup. The offline [transfer tool](project-backup-transfer.md) can copy and inspect a matched archive and register it on a fresh destination. Live different-host validation remains pending.
 
 The catalog admits at most 64 completed backups and 4,096 operation receipts per
 project. Completed archive tombstones no longer occupy checkpoint slots. Explicit

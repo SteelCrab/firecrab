@@ -283,7 +283,8 @@ def import_status(args):
                                destinationVmId=record["request"]["vm"],
                                destinationStorageId=record["request"]["storage"],
                                volumeName=record["request"]["volumeName"],
-                               completedAt=record.get("completedAt")))
+                               completedAt=record.get("completedAt"),
+                               quarantineCleanup=(record.get("quarantineCleanup") or {}).get("phase")))
         print(json.dumps({"imports": result, "inspectionOnly": True}))
     finally:
         control.close()
@@ -312,6 +313,10 @@ def main():
     abandon.add_argument("--destination-control", required=True)
     abandon.add_argument("--operation", required=True, type=identifier)
     abandon.add_argument("--confirm-abandon", action="store_true")
+    purge = commands.add_parser("purge-abandoned", help="Preview or explicitly remove one abandoned import quarantine")
+    purge.add_argument("--destination-control", required=True)
+    purge.add_argument("--operation", required=True, type=identifier)
+    purge.add_argument("--confirm-delete", action="store_true", help="Permanently delete the listed quarantine files")
     receive = commands.add_parser("import", help="Install and register a fresh project while the destination controller is stopped")
     receive.add_argument("directory", help="Transferred matched checkpoint directory")
     receive.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
@@ -330,6 +335,9 @@ def main():
     elif args.command == "abandon-import":
         from project_backup_import import abandon_import
         abandon_import(args, sys.modules[__name__])
+    elif args.command == "purge-abandoned":
+        from project_backup_quarantine import purge_abandoned
+        purge_abandoned(args, sys.modules[__name__])
     elif args.command == "import":
         from project_backup_import import run_import
         run_import(args, sys.modules[__name__])
