@@ -5,6 +5,12 @@ Ownership adapters and the native operations below are prerequisites for the ful
 43-kind contract. The expanded Stack manifest, dedicated Terraform provider and
 all-service acceptance remain incomplete. Keep the implementation unmerged.
 
+Native operations, ownership changes and Stack applies share one durable UUID namespace.
+An ownership intent and its final receipt use the same ownership UUID.
+Another operation family cannot reuse it, even after its original rows are removed.
+SQLite enforces this across API processes. Existing ambiguous cross-family history is rejected without rewriting receipts.
+This does not turn request-ID headers or unrelated transient API actions into managed execution authority.
+
 ## Volume attachment identity
 
 `volume_attachment` identifies exactly `VOLUME_UUID:VM_UUID` on one endpoint.

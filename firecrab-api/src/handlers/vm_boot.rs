@@ -219,21 +219,32 @@ mod tests {
             kind: "vm".into(),
             id: vm.id.to_string(),
         };
-        let owned = state
-            .store
-            .change_iac_resource_owner(&firecrab_stack::ChangeResourceOwner {
-                operation_id: Uuid::new_v4(),
-                expected_endpoint_id: review.expected_endpoint_id,
-                resource: target.clone(),
-                expected_generation: 0,
-                expected_owner: None,
-                owner: Some(firecrab_stack::ResourceOwner {
-                    manager: firecrab_stack::Manager::Terraform,
-                    id: Uuid::new_v4(),
-                    key: "firecrab_vm.legacy".into(),
-                }),
-            })
-            .unwrap();
+        let mut transfer = firecrab_stack::ChangeResourceOwner {
+            operation_id: review.operation_id,
+            expected_endpoint_id: review.expected_endpoint_id,
+            resource: target.clone(),
+            expected_generation: 0,
+            expected_owner: None,
+            owner: Some(firecrab_stack::ResourceOwner {
+                manager: firecrab_stack::Manager::Terraform,
+                id: Uuid::new_v4(),
+                key: "firecrab_vm.legacy".into(),
+            }),
+        };
+        assert!(matches!(
+            state.store.change_iac_resource_owner(&transfer),
+            Err(crate::persistence::PersistenceError::IacOperationIdentity)
+        ));
+        assert!(
+            state
+                .store
+                .iac_resource_owner(&target)
+                .unwrap()
+                .owner
+                .is_none()
+        );
+        transfer.operation_id = Uuid::new_v4();
+        let owned = state.store.change_iac_resource_owner(&transfer).unwrap();
         fs::remove_file(root.path().join("initrd")).unwrap();
         let (status, replayed) = request(&router, "PUT", &path, body).await;
         assert_eq!(status, StatusCode::OK, "{replayed}");

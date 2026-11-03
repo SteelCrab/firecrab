@@ -69,6 +69,7 @@ pub(crate) mod iac_managed_database_brokers;
 pub(crate) mod iac_native;
 pub(crate) mod iac_native_host;
 mod iac_native_schema;
+mod iac_operation_keys;
 mod iac_operation_queries;
 mod iac_owners;
 mod iac_resources;
@@ -684,7 +685,7 @@ pub enum PersistenceError {
     },
     /// A SQLite query/statement failed.
     #[error("VM database operation failed: {0}")]
-    Database(#[from] rusqlite::Error),
+    Database(#[source] rusqlite::Error),
     /// A stored row's data doesn't match what the application expects.
     #[error("VM database record {id} is invalid: {reason}")]
     CorruptRecord {
@@ -838,6 +839,16 @@ fn restrict_to_owner(path: &Path) {
     }
 }
 
+impl From<rusqlite::Error> for PersistenceError {
+    fn from(error: rusqlite::Error) -> Self {
+        if iac_operation_keys::identity_conflict(&error) {
+            Self::IacOperationIdentity
+        } else {
+            Self::Database(error)
+        }
+    }
+}
+
 impl Store {
     /// Opens (creating if needed) the database at `path`: sets WAL mode,
     /// creates/migrates the schema, and imports any legacy `vms.json` found
@@ -952,6 +963,7 @@ impl Store {
         conn.execute_batch(iac_images::SCHEMA)?;
         conn.execute_batch(cluster::SCHEMA)?;
         conn.execute_batch(cluster_services::SCHEMA)?;
+        iac_operation_keys::initialize(&conn)?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;

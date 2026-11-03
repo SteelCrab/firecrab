@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Reserve shared IaC operation UUIDs across ownership changes, native mutations
+  and Stack applies. Preserve original receipts and reject cross-family reuse
+  through SQLite transactions, including concurrent API processes.
+
 - Retain complete original VM boot inputs, including initrd presence, across API
   restart. Verify them for every start before runtime effects. Add explicit
   inactive legacy review with immutable operation receipts and ownership fences.
