@@ -504,9 +504,17 @@ async fn provisioning_refuses_changed_network_vm_and_group_ownership() {
     let group_id = environment.roles[0].security_group_id;
     let mut group = state.store.security_group(group_id).unwrap().unwrap();
     group.name = "borrowed-group".into();
-    state
-        .store
-        .rename_security_group(group_id, &group.name)
+    assert!(matches!(
+        state.store.rename_security_group(group_id, &group.name),
+        Err(crate::persistence::PersistenceError::IacParentManaged)
+    ));
+    // Simulate persisted corruption; public writers cannot modify this parent's child.
+    rusqlite::Connection::open(_dir.path().join("state.db"))
+        .unwrap()
+        .execute(
+            "UPDATE security_groups SET name=?2 WHERE id=?1",
+            rusqlite::params![group_id.to_string(), group.name],
+        )
         .unwrap();
     assert!(
         provision(&state, &mut environment)
@@ -928,17 +936,27 @@ async fn admission_rechecks_actual_policy_address_and_runtime_after_readiness() 
         .reserve_sandbox_environment(&environment)
         .unwrap();
     assert!(binding(&state, environment.id, None).is_ok());
-    state
-        .store
-        .replace_security_group_rules(
-            group.id,
-            &[SecurityGroupRule {
-                direction: SecurityGroupDirection::Egress,
-                protocol: PortProtocol::Tcp,
-                port_from: 443,
-                port_to: 443,
-                peer_cidr: "0.0.0.0/0".into(),
-            }],
+    let altered = SecurityGroupRule {
+        direction: SecurityGroupDirection::Egress,
+        protocol: PortProtocol::Tcp,
+        port_from: 443,
+        port_to: 443,
+        peer_cidr: "0.0.0.0/0".into(),
+    };
+    assert!(matches!(
+        state
+            .store
+            .replace_security_group_rules(group.id, std::slice::from_ref(&altered)),
+        Err(crate::persistence::PersistenceError::IacParentManaged)
+    ));
+    let database = rusqlite::Connection::open(directory.path().join("state.db")).unwrap();
+    database
+        .execute(
+            "INSERT INTO security_group_rules(group_id,position,rule) VALUES(?1,0,?2)",
+            rusqlite::params![
+                group.id.to_string(),
+                serde_json::to_string(&altered).unwrap()
+            ],
         )
         .unwrap();
     assert!(
@@ -946,11 +964,12 @@ async fn admission_rechecks_actual_policy_address_and_runtime_after_readiness() 
             .unwrap_err()
             .contains("policy changed")
     );
-    state
-        .store
-        .replace_security_group_rules(group.id, &[])
+    database
+        .execute(
+            "DELETE FROM security_group_rules WHERE group_id=?1",
+            [group.id.to_string()],
+        )
         .unwrap();
-    let database = rusqlite::Connection::open(directory.path().join("state.db")).unwrap();
     database
         .execute(
             "UPDATE network_leases SET ipv6='fd00::2' WHERE vm_id=?1 AND released_at IS NULL",
