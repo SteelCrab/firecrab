@@ -482,6 +482,7 @@ fn iac_owner_vm_transition_blocks_adoption_and_release() {
         template_kernel_sha256: "kernel".into(),
         template_rootfs_sha256: "rootfs".into(),
         template_boot_args_sha256: "args".into(),
+        boot_pin: None,
         cpu: 1,
         ram: 256,
         disk_gb: 2,

@@ -412,6 +412,7 @@ async fn insert_vm_checked(
         template_kernel_sha256: template.kernel.sha256().to_owned(),
         template_rootfs_sha256: template.rootfs.sha256().to_owned(),
         template_boot_args_sha256: template.boot_args_sha256(),
+        boot_pin: Some(template.stack_pin()),
         ram: req.ram,
         cpu: req.cpu,
         disk_gb: req.disk_gb,
@@ -1720,20 +1721,14 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     let vm_id = vm.id;
     let approved_template = template.clone();
     let templates = state.templates.clone();
+    let approved_vm = vm.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let pin = store.stack_vm_pin(vm_id, true)
             .map_err(|_| "Could not read approved stack template".to_owned())?;
-        let Some(pin) = pin else { return Ok(()); };
-        if pin != approved_template.stack_pin() {
+        if pin.is_some_and(|pin| pin != approved_template.stack_pin()) {
             return Err("Approved stack template content changed; restore its exact artifacts before starting the VM".into());
         }
-        for artifact in std::iter::once(&approved_template.kernel)
-            .chain(std::iter::once(&approved_template.rootfs))
-            .chain(approved_template.initrd.iter())
-        {
-            templates.open_verified(artifact)
-                .map_err(|_| "Approved stack template artifact changed; restore its exact bytes before starting the VM".to_owned())?;
-        }
+        crate::vm_boot::verify(&approved_vm, &templates, &approved_template)?;
         Ok(())
     })
         .await
@@ -3229,6 +3224,7 @@ pub(crate) mod test_support {
             template_kernel_sha256: String::new(),
             template_rootfs_sha256: String::new(),
             template_boot_args_sha256: String::new(),
+            boot_pin: None,
             cpu: 1,
             ram: 128,
             // 0 keeps `run_start`'s disk grow step a no-op against this
@@ -3310,6 +3306,19 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn seed_vm(state: &AppState, vm: &VmRecord) {
+        let mut fixture = vm.clone();
+        if fixture.template_kernel_sha256.is_empty()
+            && fixture.template_rootfs_sha256.is_empty()
+            && let Some(template) = state
+                .templates
+                .resolve_version(&fixture.template, &fixture.template_version)
+        {
+            fixture.template_kernel_sha256 = template.kernel.sha256().to_owned();
+            fixture.template_rootfs_sha256 = template.rootfs.sha256().to_owned();
+            fixture.template_boot_args_sha256 = template.boot_args_sha256();
+            fixture.boot_pin = Some(template.stack_pin());
+        }
+        let vm = &fixture;
         // A VM with a lease must also belong to a real persisted network.
         // Keep unknown-network failure fixtures explicit rather than weakening
         // the production DNS-posture lookup during VM specialization.
@@ -3779,6 +3788,7 @@ mod tests {
     }
 
     fn seed_console_log(state: &AppState, vm: &mut VmRecord, contents: impl AsRef<[u8]>) {
+        *vm = state.store.load_all().unwrap().remove(&vm.id).unwrap();
         let runtime_id = Uuid::new_v4();
         let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.runtime.vms_dir, vm.id);
         let runtime = paths.create_runtime(runtime_id).unwrap();

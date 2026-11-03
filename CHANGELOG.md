@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Retain complete original VM boot inputs, including initrd presence, across API
+  restart. Verify them for every start before runtime effects. Add explicit
+  inactive legacy review with immutable operation receipts and ownership fences.
+
 - Preserve independent Sandbox preview binding ownership with original task/runtime
   checks and transactional fences for native changes, handoffs and parent deletion.
 - Add native management-settings ownership with physical installation identity,

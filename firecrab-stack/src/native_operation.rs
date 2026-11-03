@@ -46,6 +46,8 @@ pub enum NativeAction {
     UpdateDatabaseConnection,
     /// Remove one inactive VM after recording its immutable disk-retention policy.
     DeleteVm,
+    /// Explicitly approve the complete original boot proof of an inactive legacy VM.
+    ReviewVmBootPin,
     /// Revoke one scoped credential and invalidate its previous management authority.
     RevokeDeployToken,
     /// Install the broker using its one reserved VM and disk identity.

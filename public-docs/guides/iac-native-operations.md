@@ -27,6 +27,10 @@ Existing stopped-VM, exclusive-volume and non-overlapping-mount rules apply.
 
 ## VM cleanup
 
+Every VM start verifies its original kernel, root filesystem, optional initrd and boot arguments before runtime effects.
+New VMs retain that complete proof across API restart, independently of Stack ownership.
+See [VM boot inputs](iac-vm-boot-inputs.md) for inspection and explicit legacy initrd review.
+
 Native VM deletion reserves the exact VM UUID and records its disk policy
 before log draining, host teardown or filesystem dispatch. Cleanup continues
 when an HTTP waiter disconnects. The API returns `x-firecrab-operation-id`.

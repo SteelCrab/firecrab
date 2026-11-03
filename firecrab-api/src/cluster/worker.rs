@@ -296,6 +296,11 @@ fn matches_spec(vm: &VmRecord, r: &WorkerReceipt) -> bool {
         && vm.template_kernel_sha256 == image.kernel_sha256
         && vm.template_rootfs_sha256 == image.rootfs_sha256
         && vm.template_boot_args_sha256 == image.boot_args_sha256
+        && vm
+            .boot_pin
+            .as_ref()
+            .and_then(|pin| pin.initrd_sha256.as_ref())
+            == image.initrd_sha256.as_ref()
         && vm.cpu == spec.cpu
         && vm.ram == spec.ram
         && vm.disk_gb == spec.disk_gb

@@ -315,6 +315,11 @@ fn verify_vm(
         || vm.template_kernel_sha256 != role.template.kernel_sha256
         || vm.template_rootfs_sha256 != role.template.rootfs_sha256
         || vm.template_boot_args_sha256 != role.template.boot_args_sha256
+        || vm
+            .boot_pin
+            .as_ref()
+            .and_then(|pin| pin.initrd_sha256.as_ref())
+            != role.template.initrd_sha256.as_ref()
         || vm.cpu != role.cpu
         || vm.ram != role.memory_mib
         || vm.disk_gb != role.disk_gb

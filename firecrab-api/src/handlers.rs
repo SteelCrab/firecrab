@@ -36,6 +36,7 @@ pub mod stack_sources;
 pub mod stacks;
 pub mod storage;
 pub mod update;
+pub(crate) mod vm_boot;
 pub(crate) mod vm_deletion;
 pub mod vm_execution;
 pub mod vms;

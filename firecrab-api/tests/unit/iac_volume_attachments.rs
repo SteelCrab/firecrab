@@ -136,6 +136,7 @@ async fn iac_volume_attachment_cannot_retarget_or_adopt_generated_or_busy_vm() {
     let state = test_state(root.path()).await;
     let mut vm = record("attachment-validation", Uuid::new_v4());
     seed_vm(&state, &vm);
+    vm = state.store.load_all().unwrap().remove(&vm.id).unwrap();
     let volume = volume(&state, "identity-disk");
     state
         .store

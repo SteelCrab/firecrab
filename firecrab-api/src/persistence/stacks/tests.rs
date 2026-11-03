@@ -59,6 +59,7 @@ fn vm(id: Uuid, purpose: VmPurpose) -> VmRecord {
         template_kernel_sha256: "kernel".to_owned(),
         template_rootfs_sha256: "rootfs".to_owned(),
         template_boot_args_sha256: "args".to_owned(),
+        boot_pin: None,
         cpu: 1,
         ram: 256,
         disk_gb: 2,

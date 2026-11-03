@@ -76,6 +76,7 @@ mod iac_sandbox_tunnels;
 pub(crate) mod iac_vm_deletes;
 mod iac_volume_attachments;
 pub(crate) mod queue_engine_operations;
+mod vm_boot;
 mod volume_mounts;
 pub(crate) use iac_resources::TRANSFER_KINDS as IAC_TRANSFER_KINDS;
 mod stacks;
@@ -107,33 +108,34 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     last_runtime_id TEXT,
     purpose TEXT NOT NULL DEFAULT 'instance',
     env TEXT NOT NULL DEFAULT '{}',
-    security_group_id TEXT
+    security_group_id TEXT,
+    boot_pin TEXT
 ) STRICT";
 
 /// Selects every column [`Store::load_all`] needs.
 const SELECT_ALL_SQL: &str = "SELECT id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env, security_group_id FROM vms";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env, security_group_id, boot_pin FROM vms";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_SQL: &str = "INSERT INTO vms (id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env, security_group_id) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env, security_group_id, boot_pin) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)";
 
 /// Upserts a row, used only by the one-time legacy `vms.json` import.
 const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template, \
     template_version, template_kernel_sha256, template_rootfs_sha256, \
     template_boot_args_sha256, cpu, ram, disk_gb, egress_policy, micro_network_id, storage_root, \
-    disk_generation, last_runtime_id, purpose, env, security_group_id) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
+    disk_generation, last_runtime_id, purpose, env, security_group_id, boot_pin) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)";
 
 /// Replaces an existing row's columns by id.
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
     template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12, \
     micro_network_id = ?13, storage_root = ?14, disk_generation = ?15, last_runtime_id = ?16, \
-    purpose = ?17, env = ?18, security_group_id = ?19 WHERE id = ?1";
+    purpose = ?17, env = ?18, security_group_id = ?19 WHERE id = ?1 AND boot_pin IS ?20";
 
 /// Schema for the `micro_networks` table (`public-docs/guides/networking.md`).
 /// The gateway isn't stored — it's derived from `subnet_cidr` — and neither
@@ -360,6 +362,30 @@ fn migrate_disk_generation_columns(conn: &Connection) -> Result<(), PersistenceE
         }
     }
     Ok(())
+}
+
+/// Never infer an unrecorded initrd from the current registry during migration.
+fn migrate_boot_pin_column(conn: &Connection) -> Result<(), PersistenceError> {
+    if !conn
+        .prepare("SELECT 1 FROM pragma_table_info('vms') WHERE name='boot_pin'")?
+        .exists([])?
+    {
+        conn.execute("ALTER TABLE vms ADD COLUMN boot_pin TEXT", [])?;
+    }
+    Ok(())
+}
+
+fn decode_boot_pin(
+    id: &str,
+    raw: Option<String>,
+) -> Result<Option<firecrab_stack::TemplatePin>, PersistenceError> {
+    raw.map(|raw| {
+        serde_json::from_str(&raw).map_err(|_| PersistenceError::CorruptRecord {
+            id: id.to_owned(),
+            reason: "invalid VM boot proof".into(),
+        })
+    })
+    .transpose()
 }
 
 const ADD_ENV_COLUMN_SQL: &str = "ALTER TABLE vms ADD COLUMN env TEXT NOT NULL DEFAULT '{}'";
@@ -846,6 +872,7 @@ impl Store {
         migrate_disk_generation_columns(&conn)?;
         migrate_purpose_column(&conn)?;
         migrate_env_column(&conn)?;
+        migrate_boot_pin_column(&conn)?;
         security_groups::migrate(&conn)?;
         conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
         migrate_lease_ipv6_column(&conn)?;
@@ -896,6 +923,7 @@ impl Store {
         conn.execute_batch(iac_host::SCHEMA)?;
         iac_native_host::initialize(&conn)?;
         iac_native_schema::initialize(&conn)?;
+        conn.execute_batch(vm_boot::SCHEMA)?;
         conn.execute_batch(iac_database_targets::SCHEMA)?;
         conn.execute_batch(iac_database_operations::SCHEMA)?;
         conn.execute_batch(iac_database_bindings::SCHEMA)?;
@@ -962,6 +990,7 @@ impl Store {
                     template_kernel_sha256: row.get(5)?,
                     template_rootfs_sha256: row.get(6)?,
                     template_boot_args_sha256: row.get(7)?,
+                    boot_pin: decode_boot_pin(&id_text, row.get(19)?)?,
                     cpu: row.get(8)?,
                     ram: row.get(9)?,
                     disk_gb: row.get(10)?,
@@ -1002,6 +1031,13 @@ impl Store {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         iac_native::ensure_idle(&tx, &iac_vm_deletes::resource(vm.id))?;
         if execute_record(&tx, UPDATE_SQL, vm)? == 0 {
+            if tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM vms WHERE id=?1)",
+                [vm.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )? {
+                return Err(PersistenceError::StaleIacExecution);
+            }
             return Err(PersistenceError::MissingVm { id: vm.id });
         }
         tx.commit()?;
@@ -2057,6 +2093,11 @@ fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, 
             vm.purpose.id(),
             encode_env(&vm.env),
             vm.security_group_id.map(|id| id.to_string()),
+            vm.boot_pin
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .expect("serializable boot pin"),
         ],
     )
 }
@@ -2174,6 +2215,7 @@ mod tests {
             template_kernel_sha256: "kernel".to_owned(),
             template_rootfs_sha256: "rootfs".to_owned(),
             template_boot_args_sha256: "args".to_owned(),
+            boot_pin: None,
             cpu: 1,
             ram: 512,
             disk_gb: 2,

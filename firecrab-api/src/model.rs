@@ -88,6 +88,10 @@ pub struct VmRecord {
     /// SHA256 of the template's boot args at creation time.
     #[serde(default)]
     pub template_boot_args_sha256: String,
+    /// Complete immutable boot content, including whether an initrd was present.
+    /// Legacy records lack this proof and cannot silently approve a new initrd.
+    #[serde(default)]
+    pub boot_pin: Option<firecrab_stack::TemplatePin>,
     /// vCPU count.
     pub cpu: u8,
     /// RAM in MiB.

@@ -35,6 +35,7 @@ pub(crate) async fn protect_resources(
         "/api/pipe/databases/{id}" | "/api/pipe/databases/{id}/access"
     ) && request.method() == Method::PUT)
         || path.as_str() == "/api/vms/{id}/ssh-host-key/check"
+        || path.as_str() == "/api/vms/{id}/boot-inputs"
     {
         return next.run(request).await;
     }

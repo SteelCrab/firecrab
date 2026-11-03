@@ -1062,6 +1062,7 @@ mod tests {
             template_kernel_sha256: "kernel".to_owned(),
             template_rootfs_sha256: "rootfs".to_owned(),
             template_boot_args_sha256: "args".to_owned(),
+            boot_pin: None,
             cpu,
             ram,
             disk_gb: 2,

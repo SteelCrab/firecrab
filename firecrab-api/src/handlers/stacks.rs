@@ -193,7 +193,7 @@ pub(crate) fn inventory(
                 template_kernel_sha256: vm.template_kernel_sha256,
                 template_rootfs_sha256: vm.template_rootfs_sha256,
                 template_boot_args_sha256: vm.template_boot_args_sha256,
-                template_pin: store.stack_vm_pin(vm.id, false)?,
+                template_pin: vm.boot_pin.or(store.stack_vm_pin(vm.id, false)?),
                 disk_generation: vm.disk_generation,
                 cpu: vm.cpu,
                 ram: vm.ram,

@@ -40,6 +40,7 @@ const ACTIONS: Record<string, [string, string]> = {
   create_database_connection: ["Create database connection", "DB 연결 생성"],
   update_database_connection: ["Update database connection", "DB 연결 수정"],
   delete_vm: ["Delete VM", "VM 삭제"],
+  review_vm_boot_pin: ["Review VM boot inputs", "VM 부팅 입력 확인"],
   delete_sandbox_project: [
     "Delete project workspace",
     "프로젝트 작업 공간 삭제",

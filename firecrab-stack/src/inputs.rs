@@ -21,7 +21,8 @@ pub struct TemplatePin {
 }
 
 impl TemplatePin {
-    pub(crate) fn valid(&self) -> bool {
+    /// Check the bounded version and lowercase SHA256 content identities.
+    pub fn valid(&self) -> bool {
         !self.version.is_empty()
             && self.version.len() <= 256
             && self

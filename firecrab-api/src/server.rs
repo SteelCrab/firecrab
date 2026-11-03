@@ -210,6 +210,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ));
 
     let rest = Router::new()
+        .route(
+            "/api/vms/{id}/boot-inputs",
+            get(handlers::vm_boot::inspect).put(handlers::vm_boot::review),
+        )
         .route("/api/iac/identity", get(handlers::iac::identity))
         .route(
             "/api/iac/native/identity",

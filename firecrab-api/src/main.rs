@@ -56,6 +56,7 @@ mod state;
 mod storage;
 mod templates;
 mod tls;
+mod vm_boot;
 mod vm_execution;
 mod vm_shim;
 

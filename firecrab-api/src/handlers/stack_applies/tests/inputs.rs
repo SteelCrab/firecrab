@@ -208,7 +208,7 @@ async fn stack_apply_uses_the_approved_version_after_alias_repoint_and_retains_i
         .as_ref()
         .unwrap();
     assert!(
-        detail.starts_with("Approved stack template artifact changed"),
+        detail.starts_with("Original VM boot artifact is unavailable or changed"),
         "{detail}"
     );
     assert!(!detail.contains("DO-NOT-PRINT"));
