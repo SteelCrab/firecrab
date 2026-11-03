@@ -31,6 +31,7 @@ fn input(
             },
         },
         resource: None,
+        removal: None,
         desired: Some(ResourceConfiguration::AiModel(AiModelConfiguration {
             project_id: Uuid::new_v4(),
             selection: AiModelSelection {

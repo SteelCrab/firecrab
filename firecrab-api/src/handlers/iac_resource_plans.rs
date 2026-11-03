@@ -9,7 +9,9 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use firecrab_stack::{ApplyResourcePlan, PlanResource, ResourcePlan, ResourcePlanReceipt};
+use firecrab_stack::{
+    ApplyResourcePlan, PlanResource, ResourcePlan, ResourcePlanReceipt, UploadResourceValue,
+};
 use uuid::Uuid;
 
 fn operator(caller: &Caller, request: Uuid) -> Result<(), AppError> {
@@ -23,6 +25,23 @@ fn operator(caller: &Caller, request: Uuid) -> Result<(), AppError> {
     })
 }
 
+pub(crate) async fn upload(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+    Path(id): Path<Uuid>,
+    caller: Caller,
+    ValidatedJson(input): ValidatedJson<UploadResourceValue>,
+) -> Result<axum::http::StatusCode, AppError> {
+    operator(&caller, request.0)?;
+    database(request.0, move || {
+        state
+            .store
+            .upload_resource_value(&state.secrets, id, input, crate::secrets::now_ms())
+    })
+    .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
 pub(crate) async fn plan(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -31,7 +50,9 @@ pub(crate) async fn plan(
 ) -> Result<Json<ResourcePlan>, AppError> {
     operator(&caller, request.0)?;
     database(request.0, move || {
-        state.store.plan_resource(input, crate::secrets::now_ms())
+        state
+            .store
+            .plan_vault_resource(&state.secrets, input, crate::secrets::now_ms())
     })
     .await
     .map(Json)
@@ -83,10 +104,15 @@ async fn execute(
     let _admission = state.stack_apply_admission.lock().await;
     let _ai = state.pipe_ai_mutations.lock().await;
     let store = state.store.clone();
-    let policy = database(request.0, move || store.resource_plan(id))
+    let kind = database(request.0, move || store.resource_plan(id))
         .await?
-        .is_some_and(|plan| plan.ownership.resource.kind == "sandbox_access");
-    let _sandbox = if policy {
+        .map(|plan| plan.ownership.resource.kind);
+    let _services = if kind.as_deref() == Some("secret") {
+        Some(state.service_mutations.clone().lock_owned().await)
+    } else {
+        None
+    };
+    let _sandbox = if kind.as_deref() == Some("sandbox_access") {
         Some(state.sandbox.admission.clone().lock_owned().await)
     } else {
         None
@@ -113,9 +139,18 @@ async fn execute(
         }
     }
     database(request.0, move || {
-        state
-            .store
-            .apply_resource_plan(id, &input, crate::secrets::now_ms())
+        if kind.as_deref() == Some("secret") {
+            state.store.apply_vault_resource_plan(
+                &state.secrets,
+                id,
+                &input,
+                crate::secrets::now_ms(),
+            )
+        } else {
+            state
+                .store
+                .apply_resource_plan(id, &input, crate::secrets::now_ms())
+        }
     })
     .await
 }

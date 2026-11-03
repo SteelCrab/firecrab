@@ -17,6 +17,14 @@ CREATE INDEX IF NOT EXISTS iac_native_dependency_resource ON iac_native_dependen
 CREATE TABLE IF NOT EXISTS iac_resource_plans (
  operation_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, definition TEXT NOT NULL, receipt TEXT
 ) STRICT;
+CREATE TABLE IF NOT EXISTS iac_resource_plan_executions (
+ operation_id TEXT PRIMARY KEY REFERENCES iac_resource_plans(operation_id),
+ kind TEXT NOT NULL, resource_id TEXT NOT NULL, manager TEXT NOT NULL,
+ owner_id TEXT NOT NULL, logical_key TEXT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS iac_secret_value_sources (
+ secret_id TEXT PRIMARY KEY, value_source TEXT NOT NULL, vault_version INTEGER
+) STRICT;
 CREATE TRIGGER IF NOT EXISTS iac_plan_native_identity BEFORE INSERT ON iac_native_operations
  WHEN EXISTS(SELECT 1 FROM iac_resource_plans WHERE operation_id=NEW.operation_id)
  AND json_extract(NEW.status,'$.action')<>'apply_resource_plan'
@@ -24,6 +32,34 @@ CREATE TRIGGER IF NOT EXISTS iac_plan_native_identity BEFORE INSERT ON iac_nativ
 CREATE TRIGGER IF NOT EXISTS iac_native_plan_identity BEFORE INSERT ON iac_resource_plans
  WHEN EXISTS(SELECT 1 FROM iac_native_operations WHERE operation_id=NEW.operation_id)
  BEGIN SELECT RAISE(ABORT,'iac_operation_identity_conflict'); END;";
+
+pub(super) fn initialize_secret_reference_guards(
+    conn: &Connection,
+) -> Result<(), PersistenceError> {
+    if !conn
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='micro_services'")?
+        .exists([])?
+    {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS iac_secret_service_insert BEFORE INSERT ON micro_services
+ WHEN EXISTS(SELECT 1 FROM json_each(NEW.spec,'$.secrets') s
+ JOIN iac_native_operations o ON o.kind='secret' AND o.resource_id=s.value
+ LEFT JOIN iac_resource_plans p ON p.operation_id=o.operation_id
+ WHERE o.state IN ('running','needs_recovery')
+ OR (o.state='succeeded' AND json_extract(p.receipt,'$.plan.removal.deleteData')=1))
+ BEGIN SELECT RAISE(ABORT,'iac_secret_reference_busy'); END;
+CREATE TRIGGER IF NOT EXISTS iac_secret_service_update BEFORE UPDATE OF spec ON micro_services
+ WHEN EXISTS(SELECT 1 FROM json_each(NEW.spec,'$.secrets') s
+ JOIN iac_native_operations o ON o.kind='secret' AND o.resource_id=s.value
+ LEFT JOIN iac_resource_plans p ON p.operation_id=o.operation_id
+ WHERE o.state IN ('running','needs_recovery')
+ OR (o.state='succeeded' AND json_extract(p.receipt,'$.plan.removal.deleteData')=1))
+ BEGIN SELECT RAISE(ABORT,'iac_secret_reference_busy'); END;",
+    )?;
+    Ok(())
+}
 
 /// A delayed request cannot advance a newer uncertain attempt after another recovery already failed.
 pub(super) fn check_recovery_attempt(
@@ -57,7 +93,8 @@ pub(super) fn ensure_stack_idle(conn: &Connection, stack: Uuid) -> Result<(), Pe
         AND json_extract(status,'$.ownership.owner.id')=?1)
         OR EXISTS(SELECT 1 FROM iac_native_dependencies d JOIN iac_native_operations o
         ON o.operation_id=d.operation_id WHERE o.state IN ('running','needs_recovery')
-        AND json_extract(d.ownership,'$.owner.manager')='stack' AND json_extract(d.ownership,'$.owner.id')=?1)", [stack.to_string()], |row|row.get(0))?;
+        AND json_extract(d.ownership,'$.owner.manager')='stack' AND json_extract(d.ownership,'$.owner.id')=?1)
+        OR EXISTS(SELECT 1 FROM iac_resource_plan_executions WHERE manager='stack' AND owner_id=?1)", [stack.to_string()], |row|row.get(0))?;
     if busy {
         return Err(PersistenceError::IacResourceBusy);
     }

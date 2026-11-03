@@ -267,6 +267,54 @@ pub(crate) struct Contents {
     /// Durable rotation admission/retry state; never exposed through Secrets APIs.
     #[serde(default)]
     pub service_rotations: BTreeMap<Uuid, ServiceRotation>,
+    /// Plan-bound write-only values, removed when their original effect commits.
+    #[serde(default)]
+    pub iac_plan_inputs: BTreeMap<Uuid, IacPlanInput>,
+    /// Prepared/applied effects retained until SQLite confirms their original receipt.
+    #[serde(default)]
+    pub iac_plan_executions: BTreeMap<Uuid, IacPlanExecution>,
+}
+
+/// A private input cannot be moved to another endpoint, plan, resource or owner.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IacPlanScope {
+    pub operation_id: Uuid,
+    pub plan_sha256: String,
+    pub ownership: firecrab_stack::ResourceOwnership,
+    pub owner: firecrab_stack::ResourceOwner,
+}
+
+/// Input bytes exist only in the encrypted vault and never in a public journal.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IacPlanInput {
+    pub scope: IacPlanScope,
+    pub version: u64,
+    pub value: String,
+}
+
+/// Original private value effects and their metadata acknowledgement are separate phases.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum IacPlanEffect {
+    Prepared {
+        value: Option<String>,
+        at_ms: u64,
+    },
+    Applied {
+        version: Option<u64>,
+        value_source: Option<firecrab_stack::CredentialInput>,
+        last_source: Option<firecrab_stack::CredentialInput>,
+    },
+}
+
+/// A stored applied effect recovers acknowledgement without provisioning a newer value.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IacPlanExecution {
+    pub scope: IacPlanScope,
+    pub effect: IacPlanEffect,
 }
 
 /// Private credential snapshot; values and fingerprints never enter public journals.

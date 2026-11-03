@@ -15,6 +15,74 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn iac_resource_secret_http_keeps_input_private_and_rejects_other_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let templates =
+        crate::templates::TemplateRegistry::from_specs(root.path(), std::iter::empty()).unwrap();
+    let state = AppState::with_db_file(templates, root.path().join("state.db"))
+        .await
+        .unwrap();
+    let app = router(&state).layer(Extension(LocalOperator));
+    let endpoint = state.store.iac_endpoint_id().unwrap();
+    let input = json!({"operationId":Uuid::new_v4(),"expectedEndpointId":endpoint,
+        "owner":{"manager":"terraform","id":Uuid::new_v4(),"key":"firecrab_secret.private"},"resource":null,
+        "desired":{"kind":"secret","configuration":{"name":"HTTP_PRIVATE","value":{"kind":"write_only","version":1}}}});
+    let (status, plan) = send(&app, "POST", "/api/iac/resource-plans", input.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    let id = plan["operationId"].as_str().unwrap();
+    let upload_path = format!("/api/iac/resource-plans/{id}/credentials");
+    let body = json!({"expectedEndpointId":endpoint,"planSha256":plan["planSha256"],"version":1,"value":"private-http-credential-canary"});
+    let remote = app.clone().layer(Extension(ConnectInfo(AuthenticatedHost {
+        host_id: Uuid::new_v4(),
+    })));
+    assert_eq!(
+        send(&remote, "POST", &upload_path, body.clone()).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let mut wrong = body.clone();
+    wrong["expectedEndpointId"] = json!(Uuid::new_v4());
+    assert_eq!(
+        send(&app, "POST", &upload_path, wrong).await.0,
+        StatusCode::CONFLICT
+    );
+    let mut wrong = body.clone();
+    wrong["planSha256"] = json!("0".repeat(64));
+    assert_eq!(
+        send(&app, "POST", &upload_path, wrong).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        send(&app, "POST", &upload_path, body.clone()).await,
+        (StatusCode::NO_CONTENT, Value::Null)
+    );
+    assert_eq!(
+        send(&app, "POST", &upload_path, body).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let command = json!({"expectedEndpointId":endpoint,"planSha256":plan["planSha256"]});
+    let path = format!("/api/iac/resource-plans/{id}/apply");
+    let (status, receipt) = send(&app, "POST", &path, command.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert!(
+        !receipt
+            .to_string()
+            .contains("private-http-credential-canary")
+    );
+    assert_eq!(
+        send(&app, "POST", &path, command).await,
+        (StatusCode::OK, receipt)
+    );
+    state
+        .secrets
+        .read(|contents| {
+            assert_eq!(contents.secrets.len(), 1);
+            assert_eq!(contents.secrets[0].value, "private-http-credential-canary");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[tokio::test]
 async fn iac_resource_access_http_preserves_operator_authority_and_restricted_deny_rows() {
     let root = tempfile::tempdir().unwrap();
     let templates =
@@ -285,7 +353,14 @@ async fn send(app: &Router, method: &str, path: &str, body: Value) -> (StatusCod
         .unwrap();
     let status = response.status();
     let body = to_bytes(response.into_body(), 128 * 1024).await.unwrap();
-    (status, serde_json::from_slice(&body).unwrap())
+    (
+        status,
+        if body.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&body).unwrap()
+        },
+    )
 }
 
 #[tokio::test]
@@ -350,7 +425,7 @@ async fn iac_resource_plan_http_uses_verified_operator_identity_and_returns_no_s
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         identity["resourcePlanKinds"],
-        json!(["shell", "ai_model", "sandbox_access"])
+        json!(["shell", "ai_model", "sandbox_access", "secret"])
     );
     let target = receipt["ownership"]["resource"]["id"].as_str().unwrap();
     let (status, _) = send(

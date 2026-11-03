@@ -28,10 +28,16 @@ Entries land here as work merges, and move under the next version heading when t
 ## [0.5.0] - 2026-11-02
 
 Release validation updates for the React dashboard and guest workflows.
+
 See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 [#573](https://github.com/SteelCrab/firecrab/pull/573).
 
 ### Added
+
+- Add shared Secret plans with plan-bound encrypted private inputs, exact source
+  versions, retained data by default and recovery of the original file effect
+  after a lost SQLite acknowledgement. Keep uncertain target/address/Stack
+  reservations and reject late service references across API processes (#548).
 
 - Add shared Sandbox access-policy plans for both managers. Normalize grant sets,
   pin original source directories, commit authority and receipts atomically, and

@@ -22,6 +22,7 @@ fn input(store: &Store, manager: Manager) -> PlanResource {
             },
         },
         resource: None,
+        removal: None,
         desired: Some(ResourceConfiguration::SandboxAccess(
             SandboxAccessConfiguration {
                 principal: Uuid::new_v4(),

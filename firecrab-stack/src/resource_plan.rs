@@ -21,6 +21,8 @@ pub enum ResourceConfiguration {
     AiModel(AiModelConfiguration),
     /// Exact delegated-host access policy; application resources remain borrowed.
     SandboxAccess(SandboxAccessConfiguration),
+    /// Encrypted host Secret metadata and a separate, versioned private value input.
+    Secret(SecretConfiguration),
 }
 
 impl ResourceConfiguration {
@@ -30,6 +32,7 @@ impl ResourceConfiguration {
             Self::Shell(_) => "shell",
             Self::AiModel(_) => "ai_model",
             Self::SandboxAccess(_) => "sandbox_access",
+            Self::Secret(_) => "secret",
         }
     }
 }
@@ -58,6 +61,47 @@ pub struct SandboxAccessConfiguration {
     pub revocation_generation: Option<u64>,
 }
 
+/// Credential references and write-only rotation markers never contain values.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CredentialInput {
+    /// Copy an exact existing host Secret version during first admission.
+    Secret {
+        /// Exact UUID on the selected API endpoint.
+        id: Uuid,
+        /// Original version; no lookup by name or fallback to a newer value.
+        version: u64,
+    },
+    /// Supply private bytes through the plan-bound input endpoint during apply.
+    WriteOnly {
+        /// Non-secret user-chosen rotation marker; change it to request new input.
+        version: u64,
+    },
+}
+
+/// Complete user-controlled metadata and optional value provisioning for a Secret.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SecretConfiguration {
+    /// Unique local name, following the ordinary PipeSecrets naming contract.
+    pub name: String,
+    /// Omission sets an empty description.
+    #[serde(default)]
+    pub description: String,
+    /// Omission retains an existing value; a newly created Secret requires input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<CredentialInput>,
+}
+
+/// Explicit data removal consent, frozen before any destructive work.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceRemovalPolicy {
+    /// Omission retains application/private data; deletion requires explicit consent.
+    #[serde(default)]
+    pub delete_data: bool,
+}
+
 /// Read-only reference proof without credential values or fingerprints.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -82,6 +126,9 @@ pub struct PlanResource {
     pub resource: Option<ManagedResource>,
     /// None requests deletion of the exact existing owned resource.
     pub desired: Option<ResourceConfiguration>,
+    /// Resource-specific data consent for removal; omitted policies retain data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removal: Option<ResourceRemovalPolicy>,
 }
 
 /// The action approved by a frozen plan.
@@ -119,6 +166,9 @@ pub struct ResourcePlan {
     /// Exact dependency authority and source versions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<ResourcePlanDependency>,
+    /// Exact reviewed data policy for resources with retained private data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removal: Option<ResourceRemovalPolicy>,
 }
 
 /// Execute only the previously reviewed plan; no replacement configuration is accepted.
@@ -129,6 +179,20 @@ pub struct ApplyResourcePlan {
     pub expected_endpoint_id: Uuid,
     /// Exact digest returned with the original advisory plan.
     pub plan_sha256: String,
+}
+
+/// Private input endpoint body. Values must never be logged, planned or returned.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UploadResourceValue {
+    /// Exact endpoint retained by the reviewed plan.
+    pub expected_endpoint_id: Uuid,
+    /// Exact reviewed scope; a value cannot be moved between plans or owners.
+    pub plan_sha256: String,
+    /// Marker from the plan's write-only credential input.
+    pub version: u64,
+    /// Write-only private value, including an explicitly supplied empty value.
+    pub value: String,
 }
 
 /// Immutable completion receipt, readable after later drift, transfer or deletion.

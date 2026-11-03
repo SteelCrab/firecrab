@@ -68,6 +68,17 @@ pub(super) fn ensure_available(
     conn: &Connection,
     request: &ChangeResourceOwner,
 ) -> Result<(), Error> {
+    let manager = request.owner.as_ref().map(|owner| match owner.manager {
+        Manager::Stack => "stack",
+        Manager::Terraform => "terraform",
+    });
+    let planned:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM iac_resource_plan_executions WHERE operation_id<>?1
+        AND ((kind=?2 AND resource_id=?3) OR (manager=?4 AND owner_id=?5 AND logical_key=?6 AND (manager='terraform' OR kind=?2))))",
+        params![request.operation_id.to_string(),request.resource.kind,request.resource.id,manager,
+            request.owner.as_ref().map(|owner|owner.id.to_string()),request.owner.as_ref().map(|owner|owner.key.as_str())],|row|row.get(0))?;
+    if planned {
+        return Err(Error::IacResourceBusy);
+    }
     let original: Option<(String, bool)> = conn
         .query_row(
             "SELECT request_hash,rejected FROM iac_host_owner_intents WHERE operation_id=?1",

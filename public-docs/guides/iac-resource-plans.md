@@ -1,7 +1,8 @@
 # Shared resource plans
 
 The shared planning API is part of [#548 stage 2](../reference/iac.md).
-The executable configuration adapters are `shell`, `ai_model` and `sandbox_access`.
+The executable configuration adapters are `shell`, `ai_model`, `sandbox_access`
+and `secret`.
 `GET /api/iac/identity` advertises it separately in `resourcePlanKinds`.
 The 43 ownership adapters do not imply 43 executable configuration adapters.
 Native Stack expansion and the typed Terraform provider remain pending.
@@ -67,7 +68,9 @@ The server rechecks ownership, the exact observed revision and configuration,
 active operations, parent restrictions and references in one SQLite transaction.
 A changed observation or an expired ten-minute plan requires a new plan UUID.
 No request can substitute new configuration at execution time.
-The configuration, ownership and completion receipt commit atomically.
+SQL-only configuration, ownership and completion receipts commit atomically.
+Encrypted Secret effects use separate durable file and SQL acknowledgement
+phases under one Vault lock. [Secret input and recovery](iac-secrets.md).
 An HTTP timeout does not instruct the client to create a second resource.
 
 After a lost response, repeat the exact apply request or read

@@ -66,6 +66,7 @@ fn request(store: &Store, manager: Manager) -> PlanResource {
             },
         },
         resource: None,
+        removal: None,
         desired: Some(ResourceConfiguration::Shell(CreateShellRequest {
             name: "setup".into(),
             description: Some("original metadata".into()),

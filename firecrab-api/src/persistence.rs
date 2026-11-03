@@ -571,6 +571,9 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// A private value changed outside its last acknowledged write-only input.
+    #[error("a new private credential version or explicit value retention is required")]
+    IacCredentialVersionRequired,
     /// An admitted resource operation still owns the current authority.
     #[error("IaC resource operation is active")]
     IacResourceBusy,

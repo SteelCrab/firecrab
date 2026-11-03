@@ -278,6 +278,11 @@ pub(crate) async fn update(
             if input.version != Some(secret.summary.version) {
                 return Err(SecretError::Conflict);
             }
+            ownership.note_native_secret_write(
+                id,
+                secret.summary.version,
+                input.value.is_some(),
+            )?;
             secret.summary.name = input.name;
             secret.summary.description = input.description;
             secret.summary.version += 1;
@@ -343,6 +348,11 @@ pub(crate) async fn delete(
                 .iter()
                 .position(|secret| secret.summary.id == id)
                 .ok_or(SecretError::NotFound)?;
+            ownership.note_native_secret_write(
+                id,
+                contents.secrets[index].summary.version,
+                true,
+            )?;
             contents.secrets.remove(index);
             Ok(json!({"deleted":id}))
         })
@@ -748,6 +758,11 @@ async fn apply_with_account_endpoint(
                         .iter_mut()
                         .find(|secret| secret.summary.name == value.summary.name)
                     {
+                        ownership.note_native_secret_write(
+                            secret.summary.id,
+                            secret.summary.version,
+                            true,
+                        )?;
                         secret.value = value.value;
                         secret.summary.version += 1;
                         secret.summary.updated_at = now_ms();

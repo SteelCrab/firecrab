@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+mod secret;
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ShellObservation {
@@ -34,6 +36,7 @@ enum Observation {
     Shell(ShellObservation),
     AiModel(firecrab_api_types::AiModelSelection),
     SandboxAccess(firecrab_api_types::SandboxAccessPolicy),
+    Secret(secret::SecretObservation),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -112,6 +115,7 @@ fn shell(
 fn observe(
     conn: &Connection,
     target: &ManagedResource,
+    vault: Option<&crate::secrets::Contents>,
 ) -> Result<Option<Observation>, PersistenceError> {
     match target.kind.as_str() {
         "shell" => shell(conn, target).map(|before| before.map(Observation::Shell)),
@@ -155,6 +159,12 @@ fn observe(
             }
             Ok(Some(Observation::SandboxAccess(policy)))
         }
+        "secret" => secret::observe(
+            conn,
+            target,
+            vault.ok_or(PersistenceError::IacVaultUnavailable)?,
+        )
+        .map(|value| value.map(Observation::Secret)),
         _ => Err(PersistenceError::UnsupportedIacResource),
     }
 }
@@ -185,7 +195,17 @@ fn model_connection(
 fn dependencies(
     conn: &Connection,
     desired: Option<&ResourceConfiguration>,
+    before: Option<&Observation>,
+    vault: Option<&crate::secrets::Contents>,
 ) -> Result<Vec<ResourcePlanDependency>, PersistenceError> {
+    if let Some(ResourceConfiguration::Secret(config)) = desired {
+        return secret::dependencies(
+            conn,
+            config,
+            before,
+            vault.ok_or(PersistenceError::IacVaultUnavailable)?,
+        );
+    }
     let Some(ResourceConfiguration::AiModel(config)) = desired else {
         return Ok(Vec::new());
     };
@@ -206,7 +226,10 @@ fn dependencies(
 }
 
 fn deletable(conn: &Connection, resource: &ManagedResource) -> Result<(), PersistenceError> {
-    if matches!(resource.kind.as_str(), "ai_model" | "sandbox_access") {
+    if matches!(
+        resource.kind.as_str(),
+        "ai_model" | "sandbox_access" | "secret"
+    ) {
         return Ok(());
     }
     let pinned: bool = conn.query_row(
@@ -235,7 +258,7 @@ pub(crate) fn validate(request: &mut PlanResource) -> Result<(), PersistenceErro
             .map_err(|_| PersistenceError::InvalidIacOwner)?;
         if !matches!(
             resource.kind.as_str(),
-            "shell" | "ai_model" | "sandbox_access"
+            "shell" | "ai_model" | "sandbox_access" | "secret"
         ) {
             return Err(PersistenceError::UnsupportedIacResource);
         }
@@ -283,13 +306,37 @@ pub(crate) fn validate(request: &mut PlanResource) -> Result<(), PersistenceErro
                 .normalize()
                 .map_err(|_| PersistenceError::InvalidIacOwner)?;
         }
+        Some(ResourceConfiguration::Secret(config)) => {
+            secret::validate(config)?;
+            if request
+                .resource
+                .as_ref()
+                .is_some_and(|target| target.kind != "secret")
+                || (request.resource.is_none() && config.value.is_none())
+            {
+                return Err(PersistenceError::InvalidIacOwner);
+            }
+        }
         None if request.resource.is_none() => return Err(PersistenceError::InvalidIacOwner),
         None => (),
+    }
+    if request.removal.is_some() && request.desired.is_some()
+        || request.removal.is_some_and(|policy| policy.delete_data)
+            && request
+                .resource
+                .as_ref()
+                .is_none_or(|resource| resource.kind != "secret")
+    {
+        return Err(PersistenceError::InvalidIacOwner);
     }
     Ok(())
 }
 
-fn authority(conn: &Connection, frozen: &Frozen) -> Result<(), PersistenceError> {
+fn authority(
+    conn: &Connection,
+    frozen: &Frozen,
+    vault: Option<&crate::secrets::Contents>,
+) -> Result<(), PersistenceError> {
     let target = &frozen.ownership.resource;
     if iac_owners::read(conn, target)? != frozen.ownership {
         return Err(PersistenceError::StaleIacOwner);
@@ -308,7 +355,13 @@ fn authority(conn: &Connection, frozen: &Frozen) -> Result<(), PersistenceError>
     iac_native::ensure_idle(conn, target)?;
     super::iac_host::ensure_resource_idle(conn, target)?;
     super::iac_resources::ensure_independent(conn, target)?;
-    if dependencies(conn, frozen.request.desired.as_ref())? != frozen.dependencies {
+    if dependencies(
+        conn,
+        frozen.request.desired.as_ref(),
+        frozen.before.as_ref(),
+        vault,
+    )? != frozen.dependencies
+    {
         return Err(PersistenceError::StaleIacExecution);
     }
     if source_pins(frozen.request.desired.as_ref())
@@ -419,6 +472,14 @@ impl Frozen {
                     ResourcePlanAction::Update
                 }
             }
+            (Some(Observation::Secret(before)), Some(ResourceConfiguration::Secret(desired))) => {
+                fields = secret::differences(before, desired)?;
+                if fields.is_empty() {
+                    ResourcePlanAction::Noop
+                } else {
+                    ResourcePlanAction::Update
+                }
+            }
             _ => return Err(PersistenceError::IacOperationIdentity),
         };
         Ok(ResourcePlan {
@@ -430,6 +491,8 @@ impl Frozen {
             changed_fields: fields,
             expires_at_ms: self.expires,
             dependencies: self.dependencies.clone(),
+            removal: (self.ownership.resource.kind == "secret" && self.request.desired.is_none())
+                .then(|| self.request.removal.unwrap_or_default()),
         })
     }
 }
@@ -450,7 +513,7 @@ fn read(conn: &Connection, id: Uuid) -> Result<Option<Frozen>, PersistenceError>
     if frozen.request.operation_id != id
         || !matches!(
             frozen.ownership.resource.kind.as_str(),
-            "shell" | "ai_model" | "sandbox_access"
+            "shell" | "ai_model" | "sandbox_access" | "secret"
         )
         || frozen.ownership.endpoint_id != frozen.request.expected_endpoint_id
         || frozen.revision.is_nil()
@@ -510,8 +573,17 @@ impl Store {
     /// Save a side-effect-free advisory plan. Replaying its UUID never re-observes inputs.
     pub(crate) fn plan_resource(
         &self,
+        request: PlanResource,
+        now: u64,
+    ) -> Result<ResourcePlan, PersistenceError> {
+        self.plan_resource_with_vault(request, now, None)
+    }
+
+    fn plan_resource_with_vault(
+        &self,
         mut request: PlanResource,
         now: u64,
+        vault: Option<&crate::secrets::Contents>,
     ) -> Result<ResourcePlan, PersistenceError> {
         validate(&mut request)?;
         let request_hash = fingerprint(&request)?;
@@ -542,18 +614,22 @@ impl Store {
                     id: config.principal.to_string(),
                 },
                 _ => ManagedResource {
-                    kind: "shell".into(),
+                    kind: request
+                        .desired
+                        .as_ref()
+                        .map_or("shell", ResourceConfiguration::kind)
+                        .into(),
                     id: Uuid::new_v4().to_string(),
                 },
             });
-        let before = observe(&tx, &target)?;
+        let before = observe(&tx, &target, vault)?;
         if request.resource.is_some() && before.is_none() {
             return Err(PersistenceError::InvalidStackResource);
         }
         if request.resource.is_none() && before.is_some() {
             return Err(PersistenceError::IacOwnershipConflict);
         }
-        let dependencies = dependencies(&tx, request.desired.as_ref())?;
+        let dependencies = dependencies(&tx, request.desired.as_ref(), before.as_ref(), vault)?;
         let sources = source_pins(request.desired.as_ref())?;
         let frozen = Frozen {
             schema: 1,
@@ -568,9 +644,20 @@ impl Store {
             dependencies,
             sources,
         };
-        authority(&tx, &frozen)?;
+        authority(&tx, &frozen, vault)?;
+        if target.kind == "secret" {
+            secret::preflight(vault.ok_or(PersistenceError::IacVaultUnavailable)?, &frozen)?;
+        }
         if frozen.request.desired.is_none() {
             deletable(&tx, &target)?;
+            if target.kind == "secret"
+                && frozen
+                    .request
+                    .removal
+                    .is_some_and(|policy| policy.delete_data)
+            {
+                secret::deletable(&tx, &target)?;
+            }
         }
         let summary = frozen.summary()?;
         tx.execute(
@@ -643,8 +730,8 @@ impl Store {
         if now >= frozen.expires {
             return Err(PersistenceError::StaleIacExecution);
         }
-        authority(&tx, &frozen)?;
-        if observe(&tx, &frozen.ownership.resource)? != frozen.before {
+        authority(&tx, &frozen, None)?;
+        if observe(&tx, &frozen.ownership.resource, None)? != frozen.before {
             return Err(PersistenceError::StaleIacExecution);
         }
         Ok(Some((
@@ -683,9 +770,9 @@ impl Store {
         if now >= frozen.expires || now > i64::MAX as u64 {
             return Err(PersistenceError::StaleIacExecution);
         }
-        authority(&tx, &frozen)?;
+        authority(&tx, &frozen, None)?;
         let target = &frozen.ownership.resource;
-        if observe(&tx, target)? != frozen.before {
+        if observe(&tx, target, None)? != frozen.before {
             return Err(PersistenceError::StaleIacExecution);
         }
         let before_shell = match &frozen.before {

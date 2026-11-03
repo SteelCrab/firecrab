@@ -228,6 +228,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::iac_resource_plans::receipt),
         )
         .route(
+            "/api/iac/resource-plans/{id}/credentials",
+            post(handlers::iac_resource_plans::upload),
+        )
+        .route(
             "/api/iac/resource-plans/{id}/apply",
             post(handlers::iac_resource_plans::apply),
         )

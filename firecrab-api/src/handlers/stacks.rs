@@ -263,6 +263,11 @@ pub(crate) async fn database<T: Send + 'static>(
 /// Reuse sanitized persistence errors across host-local and controller APIs.
 pub(crate) fn persistence_error(error: PersistenceError, request_id: Uuid) -> AppError {
     match error {
+        PersistenceError::IacCredentialVersionRequired => AppError::conflict(
+            "iac_credential_version_required",
+            "private value provenance changed; provide a new rotation version or explicitly retain the current value",
+            request_id,
+        ),
         PersistenceError::IacResourceBusy => AppError::conflict(
             "iac_resource_busy",
             "inspect the current resource operation before changing this resource or its owner",

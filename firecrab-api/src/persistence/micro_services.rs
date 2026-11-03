@@ -609,6 +609,10 @@ fn decode(id: String, spec: String) -> Result<MicroServiceResponse, PersistenceE
 
 /// Map the unique-name constraint to a service error; preserve other database errors.
 fn write_error(error: rusqlite::Error, name: &str) -> PersistenceError {
+    if matches!(&error, rusqlite::Error::SqliteFailure(_, Some(message)) if message == "iac_secret_reference_busy")
+    {
+        return PersistenceError::IacResourceBusy;
+    }
     if let rusqlite::Error::SqliteFailure(code, _) = &error
         && code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
     {

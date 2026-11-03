@@ -71,7 +71,7 @@ pub async fn identity(
     }
     Ok(Json(
         serde_json::json!({"endpointId":id,"inventoryKinds":firecrab_stack::resource_kinds(),
-        "transferKinds":kinds,"resourcePlanKinds":["shell","ai_model","sandbox_access"],"nativeTarget":native_target,"nativeTargets":native_targets}),
+        "transferKinds":kinds,"resourcePlanKinds":["shell","ai_model","sandbox_access","secret"],"nativeTarget":native_target,"nativeTargets":native_targets}),
     ))
 }
 

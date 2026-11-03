@@ -24,6 +24,7 @@ pub(super) fn initialize(conn: &Connection) -> Result<(), PersistenceError> {
         upgrade(conn)?;
     }
     conn.execute_batch(super::iac_native::SCHEMA)?;
+    super::iac_native::initialize_secret_reference_guards(conn)?;
     Ok(())
 }
 
@@ -36,7 +37,9 @@ fn upgrade(conn: &Connection) -> Result<(), PersistenceError> {
         // must not point at a temporarily missing native-operation table.
         tx.execute_batch(
             "DROP TRIGGER IF EXISTS iac_plan_native_identity;
-            DROP TRIGGER IF EXISTS iac_native_plan_identity;",
+            DROP TRIGGER IF EXISTS iac_native_plan_identity;
+            DROP TRIGGER IF EXISTS iac_secret_service_insert;
+            DROP TRIGGER IF EXISTS iac_secret_service_update;",
         )?;
         tx.execute_batch(&format!("CREATE TABLE iac_native_operations_upgrade {COLUMNS};
             INSERT INTO iac_native_operations_upgrade SELECT operation_id,kind,resource_id,state,status FROM iac_native_operations;
@@ -98,6 +101,9 @@ mod tests {
             CREATE TABLE iac_native_operations(operation_id TEXT PRIMARY KEY,kind TEXT NOT NULL,resource_id TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('running','needs_recovery','succeeded')),status TEXT NOT NULL) STRICT;").unwrap();
         conn.execute_batch(super::super::iac_native::SCHEMA)
             .unwrap();
+        conn.execute_batch(super::super::micro_services::CREATE_TABLE_SQL)
+            .unwrap();
+        super::super::iac_native::initialize_secret_reference_guards(&conn).unwrap();
         let original = operation(
             Uuid::new_v4(),
             Uuid::new_v4(),

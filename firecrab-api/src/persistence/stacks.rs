@@ -153,6 +153,7 @@ impl Store {
         }
         super::stack_applies::ensure_idle(&tx, stack.id)?;
         super::stack_sources::ensure_idle(&tx, stack.id)?;
+        super::iac_native::ensure_stack_idle(&tx, stack.id)?;
         let configuration_owned: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM iac_resource_owners WHERE manager='stack' AND owner_id=?1)",
             [id.to_string()], |row|row.get(0),
