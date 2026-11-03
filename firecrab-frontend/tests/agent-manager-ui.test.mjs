@@ -320,7 +320,7 @@ async function setup(
       if (path === "/github/repositories")
         return route.fulfill({
           json: {
-            repositories: [
+            repositories: state.repositories || [
               {
                 name: "example/private-project",
                 private: true,
@@ -1804,6 +1804,67 @@ test("One VM repository is selected after AUTH and reused by new tasks", async (
       .length,
     1,
   );
+});
+
+test("Repository search narrows a long list without changing the chosen repository", async (t) => {
+  const { page, state } = await setup(t, { empty: true, project: false });
+  state.repositories = [
+    { name: "example/private-project", private: true, archived: false },
+    { name: "example/Website", private: false, archived: false },
+    { name: "example-org/web-archive", private: false, archived: true },
+    ...Array.from({ length: 150 }, (_, i) => ({
+      name: `example-org/service-${String(i + 1).padStart(3, "0")}`,
+      private: false,
+      archived: false,
+    })),
+  ];
+  await page
+    .getByRole("button", { name: "Reload repositories", exact: true })
+    .click();
+  const list = page.getByRole("combobox", { name: "Your GitHub repositories" });
+  const search = page.getByRole("searchbox", {
+    name: "Search repositories",
+    exact: true,
+  });
+  const listed = () =>
+    list.evaluate((select) =>
+      [...select.options].map((option) => option.value).filter(Boolean),
+    );
+  await expect.poll(listed).toHaveLength(153);
+  await expect(search).toHaveAttribute("placeholder", "Search by name");
+  // Case-insensitive, anywhere in owner/name, past the first 100 rows.
+  await search.fill("SERVICE-150");
+  await expect.poll(listed).toEqual(["example-org/service-150"]);
+  await search.fill("org/web");
+  await expect.poll(listed).toEqual(["example-org/web-archive"]);
+  await search.fill("web");
+  await expect
+    .poll(listed)
+    .toEqual(["example/Website", "example-org/web-archive"]);
+  await list.selectOption("example/Website");
+  // A search that hides the chosen repository keeps it chosen and listed.
+  await search.fill("missing");
+  await expect(
+    page.getByText("No matching repositories. Enter an address instead.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(list).toHaveValue("example/Website");
+  await expect.poll(listed).toEqual(["example/Website"]);
+  // Enter finishes a search; it does not connect the chosen repository.
+  await search.press("Enter");
+  await search.fill("");
+  await expect.poll(listed).toHaveLength(153);
+  await expect(page.getByText("No matching repositories.")).toHaveCount(0);
+  const connects = () =>
+    state.calls.filter((c) => c.path === "/project" && c.method === "POST");
+  assert.equal(connects().length, 0);
+  await page
+    .getByRole("button", { name: "Connect repository", exact: true })
+    .click();
+  await expect
+    .poll(() => connects()[0]?.body)
+    .toEqual({ repository: "example/Website", branch: "" });
 });
 
 test("A different controller cannot start GitHub AUTH or bind a repository", async (t) => {

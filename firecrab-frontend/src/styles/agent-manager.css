@@ -1222,6 +1222,21 @@
   min-width: 0;
   flex: 1;
 }
+.am-repository-search {
+  position: relative;
+  display: block;
+  margin-top: 10px;
+}
+.am-repository-search > svg {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
 .screen[data-view="ai-sandbox"]
   .agent-manager
   .am-vm-repository
@@ -1236,6 +1251,13 @@
   background-color: var(--bg);
   color: var(--text);
   font: 13px/1.5 var(--font);
+}
+.screen[data-view="ai-sandbox"]
+  .agent-manager
+  .am-vm-repository
+  .am-repository-search
+  input {
+  padding-left: 31px;
 }
 .am-vm-repository :is(input, select):focus-visible {
   border-color: var(--text-2);

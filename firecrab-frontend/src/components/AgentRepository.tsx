@@ -8,6 +8,7 @@ import {
   RefreshCw,
   ChevronRight,
   ArrowRight,
+  Search,
 } from "lucide-react";
 import {
   agentRequest,
@@ -65,6 +66,7 @@ export default function AgentRepository(p: Props) {
   const [listError, setListError] = useState("");
   const [copiedCode, setCopiedCode] = useState("");
   const [manual, setManual] = useState(false);
+  const [query, setQuery] = useState("");
   const [createRepository, setCreateRepository] = useState(false);
   const [creationDirty, setCreationDirty] = useState(false);
   const ready = p.project?.state === "ready";
@@ -142,6 +144,13 @@ export default function AgentRepository(p: Props) {
   const name = p.project?.repository
     ?.replace(/^https:\/\/github.com\//, "")
     .replace(/\.git$/, "");
+  const searchable = !manual && repositories.length > 0;
+  const search = searchable ? query.trim().toLowerCase() : "";
+  const matches = (r: Repository) => r.name.toLowerCase().includes(search);
+  // The chosen repository stays listed, so a search never changes what Connect uses.
+  const listed = repositories.filter(
+    (r) => r.name === repository || matches(r),
+  );
   const copyCode = () => {
     if (!code) return;
     void navigator.clipboard
@@ -384,6 +393,25 @@ export default function AgentRepository(p: Props) {
               </div>
             ) : connected ? (
               <>
+                {searchable && (
+                  <label className="am-repository-search">
+                    <span className="sr-only">
+                      {t("Search repositories", "저장소 검색")}
+                    </span>
+                    <Search aria-hidden="true" />
+                    <input
+                      type="search"
+                      placeholder={t("Search by name", "이름으로 검색")}
+                      value={query}
+                      disabled={!p.canControl}
+                      onChange={(e) => setQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        // Enter ends a search; it must not connect the chosen repository.
+                        if (e.key === "Enter") e.preventDefault();
+                      }}
+                    />
+                  </label>
+                )}
                 <div className="am-repository-fields">
                   {manual ? (
                     repositoryField
@@ -406,7 +434,7 @@ export default function AgentRepository(p: Props) {
                             ? t("Loading repositories…", "저장소 불러오는 중…")
                             : t("Choose a repository", "작업할 저장소 선택")}
                         </option>
-                        {repositories.map((r) => (
+                        {listed.map((r) => (
                           <option
                             key={r.name}
                             value={r.name}
@@ -450,6 +478,14 @@ export default function AgentRepository(p: Props) {
                     {t(
                       "No repositories found. Enter an address instead.",
                       "저장소가 없어요. 주소를 직접 입력해서 연결할 수도 있어요.",
+                    )}
+                  </p>
+                )}
+                {search && !repositories.some(matches) && (
+                  <p role="status">
+                    {t(
+                      "No matching repositories. Enter an address instead.",
+                      "검색 결과가 없어요. 주소를 직접 입력해서 연결할 수도 있어요.",
                     )}
                   </p>
                 )}

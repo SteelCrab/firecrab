@@ -48,15 +48,12 @@ impl Runtime {
             return Err(invalid("Connect this MicroVM's GitHub account first."));
         }
         // Return only repository identities. Credentials never leave the VM.
-        let output = guest.shell(
-            "GH_PROMPT_DISABLED=1 timeout 25 gh api 'user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member' --jq '[.[] | {name: .full_name, private: .private, archived: .archived}]'",
+        let output = guest.shell_capture(
+            include_str!("github_repositories.sh"),
             Duration::from_secs(30),
+            1024 * 1024,
         )?;
-        let mut rows: Vec<Repository> = serde_json::from_str(&output)?;
-        // Offer only repositories this VM can connect; one unsupported name
-        // (e.g. `.github`) must not hide the rest of the account.
-        rows.retain(|row| matches!(guest::repository_url(&row.name), Ok(Some(_))));
-        Ok(json!({"repositories":rows}))
+        Ok(json!({"repositories":parse_repositories(&output)?}))
     }
 
     pub fn create_github_repository(&self, input: CreateRepository) -> Result<Value, Error> {
@@ -139,6 +136,32 @@ struct Repository {
     archived: bool,
 }
 
+/// Repositories from `gh` output: a stream of repository objects, or of
+/// arrays of them (one per page), in any JSON formatting.
+fn parse_repositories(output: &str) -> Result<Vec<Repository>, Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Rows {
+        Page(Vec<Repository>),
+        One(Repository),
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut rows = Vec::new();
+    for value in serde_json::Deserializer::from_str(output).into_iter() {
+        let page = match value? {
+            Rows::Page(page) => page,
+            Rows::One(row) => vec![row],
+        };
+        // Offer only repositories this VM can connect; one unsupported name
+        // (e.g. `.github`) must not hide the rest of the account. A repository
+        // updated while pages load moves to an earlier page and can repeat.
+        rows.extend(page.into_iter().filter(|row| {
+            matches!(guest::repository_url(&row.name), Ok(Some(_))) && seen.insert(row.name.clone())
+        }));
+    }
+    Ok(rows)
+}
+
 fn parse_status(output: &str) -> Value {
     let pending = output.lines().any(|line| line == "PENDING");
     let code = output
@@ -179,5 +202,139 @@ mod tests {
         ] {
             assert!(parse_status(output)["userCode"].is_null());
         }
+    }
+
+    fn names(rows: &[Repository]) -> Vec<&str> {
+        rows.iter().map(|row| row.name.as_str()).collect()
+    }
+
+    #[test]
+    fn repository_lists_parse_from_every_gh_page_format() {
+        // The list script: one compact object per line, across pages.
+        let lines = "{\"name\":\"owner/a\",\"private\":true,\"archived\":false}\n\
+                     {\"name\":\"owner/b\",\"private\":false,\"archived\":true}\n";
+        let rows = parse_repositories(lines).unwrap();
+        assert_eq!(names(&rows), ["owner/a", "owner/b"]);
+        assert!(rows[0].private && rows[1].archived);
+        // `--paginate` with an array filter prints one array per page, and
+        // older gh versions may indent objects over several lines.
+        let pages = "[{\"name\":\"owner/a\",\"private\":false,\"archived\":false}]\n\
+                     [{\"name\":\"owner/b\",\"private\":false,\"archived\":false}]\n\
+                     {\n  \"name\": \"owner/c\",\n  \"private\": false,\n  \"archived\": false\n}\n";
+        assert_eq!(
+            names(&parse_repositories(pages).unwrap()),
+            ["owner/a", "owner/b", "owner/c"]
+        );
+        assert!(parse_repositories("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn repository_lists_keep_one_row_per_connectable_name() {
+        // A repository updated while pages load moves to an earlier page and
+        // can appear twice; names this VM cannot clone never reach the list.
+        let output = r#"[
+            {"name":"owner/app","private":false,"archived":false,"token":"x"},
+            {"name":"OpenStudyService/.github","private":false,"archived":false},
+            {"name":"../host","private":false,"archived":false},
+            {"name":"","private":false,"archived":false}
+        ]
+        {"name":"owner/app","private":false,"archived":false}
+        {"name":"owner/api","private":true,"archived":false}"#;
+        let rows = parse_repositories(output).unwrap();
+        assert_eq!(names(&rows), ["owner/app", "owner/api"]);
+        assert!(!serde_json::to_string(&rows).unwrap().contains("token"));
+        for output in [
+            "not JSON",
+            "{\"name\":\"owner/a\"}",
+            "[{\"name\":\"owner/a\",\"private\":false,\"archived\":false}",
+        ] {
+            assert!(parse_repositories(output).is_err(), "{output}");
+        }
+    }
+
+    /// Runs the list script with stub `gh` and `timeout` commands for an
+    /// account with `total` repositories whose page `fail` (if not 0) errors.
+    #[cfg(unix)]
+    fn list_repositories(total: usize, fail: usize) -> (std::process::Output, Vec<usize>) {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            ("timeout", "#!/bin/sh\nshift\nexec \"$@\"\n"),
+            (
+                "gh",
+                r#"#!/bin/sh
+page=${2#*&page=}
+page=${page%%&*}
+echo "$page" >> "$GH_CALLS"
+if [ "$page" = "$FAIL_PAGE" ]; then echo 'API rate limit exceeded' >&2; exit 1; fi
+i=$(( (page - 1) * 100 + 1 ))
+while [ "$i" -le "$TOTAL" ] && [ "$i" -le $(( page * 100 )) ]; do
+  printf '{"name":"owner/repo-%s","private":false,"archived":false}\n' "$i"
+  i=$((i + 1))
+done
+"#,
+            ),
+        ] {
+            fs::write(bin.path().join(name), body).unwrap();
+            fs::set_permissions(bin.path().join(name), fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let calls = bin.path().join("calls");
+        let output = Command::new("sh")
+            .args(["-c", include_str!("github_repositories.sh")])
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    bin.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("GH_CALLS", &calls)
+            .env("TOTAL", total.to_string())
+            .env("FAIL_PAGE", fail.to_string())
+            .output()
+            .unwrap();
+        let pages = fs::read_to_string(&calls)
+            .unwrap_or_default()
+            .lines()
+            .map(|page| page.parse().unwrap())
+            .collect();
+        (output, pages)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_pages_load_until_the_last_page_or_one_thousand_rows() {
+        for (total, expected_pages, expected_rows) in [
+            (0, vec![1], 0),
+            (42, vec![1], 42),
+            (100, vec![1, 2], 100),
+            (250, vec![1, 2, 3], 250),
+            (1500, (1..=10).collect(), 1000),
+        ] {
+            let (output, pages) = list_repositories(total, 0);
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(pages, expected_pages, "{total} repositories");
+            let rows = parse_repositories(&String::from_utf8(output.stdout).unwrap()).unwrap();
+            assert_eq!(rows.len(), expected_rows, "{total} repositories");
+            if total > 0 {
+                assert_eq!(rows[0].name, "owner/repo-1");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_failed_first_page_hides_the_repository_list() {
+        let (output, pages) = list_repositories(500, 1);
+        assert!(!output.status.success());
+        assert_eq!(pages, [1]);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("rate limit"));
+        // A later page (rate limit, slow API) keeps the newest repositories.
+        let (output, pages) = list_repositories(500, 3);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(pages, [1, 2, 3]);
+        let rows = parse_repositories(&String::from_utf8(output.stdout).unwrap()).unwrap();
+        assert_eq!(rows.len(), 200);
     }
 }
