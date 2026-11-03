@@ -1,0 +1,77 @@
+{
+  "sourceCommit": "bfb68cf7fbb35e04af54eb2a4748c343695262c6",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-03",
+  "fixture": true,
+  "scope": "Actual local Axum/SQLite/production React and the real root CLI broker inside an isolated Linux container. A test Unix-socket proxy forwards typed helper requests to that CLI and intentionally drops one committed acknowledgement. No live systemd/Nginx, KVM guest, Stack apply, Terraform provider or remote host runs. Terraform cards represent ownership metadata.",
+  "runtimeArtifacts": {
+    "apiTestBinary": {
+      "file": "firecrab_api-18966e5ed9aabb38",
+      "sha256": "34dff05a716d0ae9798e525bcd99c8913b5031e766bc489f5bf8ddffbe99bcb6"
+    },
+    "linuxCli": {
+      "file": "firecrab",
+      "sha256": "222d6278a614594c6f9afbcb8be6b576f72bf4cafbe578ab015a4797321809c5"
+    },
+    "transportProxy": true,
+    "systemdObservations": "Explicit fixtures; no actual systemd job executes."
+  },
+  "originalRequest": {
+    "expectedEndpointId": "271f8660-9a07-42c4-8a37-9793c5cc7d1d",
+    "expectedGeneration": 1,
+    "expectedOwner": {
+      "id": "c4c9b2b7-0b6b-4814-bd99-696fe4b32e66",
+      "key": "firecrab_named_tunnel.app",
+      "manager": "terraform"
+    },
+    "operationId": "51ee0302-e59d-45d0-be09-e94e5190f7b3",
+    "owner": {
+      "id": "45e11364-3fd4-4d64-a0ca-1501dacff434",
+      "key": "firecrab_named_tunnel.app",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "00000000-0000-0000-0000-000000548001",
+      "kind": "named_tunnel"
+    }
+  },
+  "recovered": {
+    "operationId": "51ee0302-e59d-45d0-be09-e94e5190f7b3",
+    "ownership": {
+      "endpointId": "271f8660-9a07-42c4-8a37-9793c5cc7d1d",
+      "resource": {
+        "kind": "named_tunnel",
+        "id": "00000000-0000-0000-0000-000000548001"
+      },
+      "generation": 2,
+      "owner": {
+        "manager": "terraform",
+        "id": "45e11364-3fd4-4d64-a0ca-1501dacff434",
+        "key": "firecrab_named_tunnel.app"
+      }
+    }
+  },
+  "peerOwnership": {
+    "endpointId": "271f8660-9a07-42c4-8a37-9793c5cc7d1d",
+    "generation": 1,
+    "owner": {
+      "id": "45e11364-3fd4-4d64-a0ca-1501dacff434",
+      "key": "firecrab_quick_tunnel.peer",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "00000000-0000-0000-0000-000000548002",
+      "kind": "quick_tunnel"
+    }
+  },
+  "manifestSha256Before": "166b158a6891e3616fe521fddca865c12d7379732493ac73973697fc87638de2",
+  "manifestSha256After": "166b158a6891e3616fe521fddca865c12d7379732493ac73973697fc87638de2",
+  "credentialsSha256Before": "7c7097a4fe6fb1f75941db7671d28590de5caceeb98437b72fc05252352e0f4d",
+  "credentialsSha256After": "7c7097a4fe6fb1f75941db7671d28590de5caceeb98437b72fc05252352e0f4d",
+  "screenshots": {
+    "iac-548-named-tunnels-desktop-2026-11-03.png": "0c4c794ce6f2331a27bc42d1c2a159aed3d2eaf5e3c5ec573fcc2f45ec352c29",
+    "iac-548-named-tunnels-mobile-2026-11-03.png": "c5df518fd036edc083844884a3610ee75fee5bd95e2f8c64059c7b4eab3f0599",
+    "iac-548-named-tunnels-recovery-mobile-2026-11-03.png": "e000f0429fe1566a2b7f3778fe035ed3c505229d751c181197c324477e69e3ef",
+    "iac-548-named-tunnels-recovery-desktop-2026-11-03.png": "6d0145c16df6dc33f6c18f1e01d8ee32efe6ccb8aabf76057f0b02779d3cf259"
+  }
+}

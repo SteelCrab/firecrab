@@ -1,0 +1,45 @@
+{
+  "sourceCommit": "bfb68cf7fbb35e04af54eb2a4748c343695262c6",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-03",
+  "platform": "linux/arm64",
+  "rustVersion": "1.97.1",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "profile": "release",
+  "buildCommand": "cargo test --release --locked -p firecrab-api --no-run --message-format=json",
+  "execution": "Compiler-reported binaries verified by SHA256, executed as nobody with --test-threads=4, writable temporary working directory and FIRECRAB_IMAGE_ROOT, read-only clean source worktree",
+  "results": {
+    "api": {
+      "passed": 1858,
+      "failed": 0,
+      "ignored": 27
+    },
+    "tlsStartup": {
+      "passed": 2,
+      "failed": 0
+    },
+    "vmShim": {
+      "passed": 6,
+      "failed": 0
+    }
+  },
+  "artifacts": [
+    {
+      "file": "tls_startup-449fac92c13a3777",
+      "sha256": "c4d785c40b689a4fb85103ee066fbfe97880d1085d1bf123cd5c407bd8002aa4"
+    },
+    {
+      "file": "vm_shim_subcommand-3ac70de652e8c996",
+      "sha256": "2766f791d72a9641fd48dd4201aaf1ae5211f2a858c81c82ec8433fcc8f32b6a"
+    },
+    {
+      "file": "firecrab_api-57d72690789f0b6e",
+      "sha256": "30838af3f67a17f8d94f9e49289aed1bbd58e61200968dc11a0df611c5cba2bd"
+    }
+  ],
+  "logs": {
+    "buildSha256": "dd703dc51ec89530cbbeeaf9fafa6ed3f7dc91b3a152e899e645831c7b175e9c",
+    "testSha256": "63cfc2fffcb4b3e8b8c2b5adc70bd9bffdbf466da46b98e63b3b8831ba478fe4"
+  },
+  "scope": "Full Linux Release API/TLS/VM shim suites. Ignored live/browser fixtures excluded. Not every-resource Stack/Terraform, real Cloudflare, or KVM/controller acceptance."
+}
