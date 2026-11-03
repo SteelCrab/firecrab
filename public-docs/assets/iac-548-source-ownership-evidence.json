@@ -1,0 +1,318 @@
+{
+  "capturedAt": "2026-10-31T10:42:16.392Z",
+  "captureDate": "2026-10-31",
+  "sourceCommit": "c05f4c31dbc4384e9efa6db61a736147cc9add2c",
+  "sourceDirty": false,
+  "focusResource": {
+    "id": "f880f224-2aed-4a09-a446-318da963a811",
+    "kind": "volume"
+  },
+  "versions": {
+    "browser": "156.0.8078.76",
+    "node": "v26.12.1"
+  },
+  "fixture": true,
+  "transport": "actual local Axum HTTP; no mocked API responses",
+  "runtime": "compiled WASM dashboard with disposable SQLite resource records; no Linux/KVM boot",
+  "ownership": {
+    "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+    "generation": 1,
+    "owner": {
+      "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+      "key": "firecrab_network.application",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "2aae6ecc-aa6a-4c0f-ab63-abd8f3030fc8",
+      "kind": "network"
+    }
+  },
+  "ownerships": [
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_database_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "2195accf-be2e-4612-a65a-cc1d38d5a09d",
+        "kind": "database_connection"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_network.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "2aae6ecc-aa6a-4c0f-ab63-abd8f3030fc8",
+        "kind": "network"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_pool.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "e9cbae6d-4cf9-4c4b-aaaf-b016782bdc66",
+        "kind": "pool"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_queue.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "eb9299dd-a773-4b0f-9f40-3d18cee63891",
+        "kind": "queue"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_sandbox_project.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "9caaece8-6dd0-42ee-9b07-7f9df21da635",
+        "kind": "sandbox_project"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_schedule.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "e0ffc706-69fd-47d2-af51-06a38f105bdb",
+        "kind": "schedule"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_secret.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "ddff7422-534a-41ba-a936-62c1c7b7e639",
+        "kind": "secret"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_secret_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "08c104e5-fabc-4e12-b4b1-8d5168d09758",
+        "kind": "secret_connection"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_security_group.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "e0e75786-1cab-44af-9e61-1d4a770f3c61",
+        "kind": "security_group"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_shell.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "66e98137-bbe8-4265-a7f4-a750beca4521",
+        "kind": "shell"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_storage_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "6d3899a0-0e12-4242-a590-693891f60557",
+        "kind": "storage_connection"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_storage_root.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "865cb898-4c70-4486-8b31-f2c1b75eb372",
+        "kind": "storage_root"
+      }
+    },
+    {
+      "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+      "generation": 1,
+      "owner": {
+        "id": "9c6ad789-b7d8-4179-a58c-e15e8c3a3a5a",
+        "key": "firecrab_volume.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "f880f224-2aed-4a09-a446-318da963a811",
+        "kind": "volume"
+      }
+    }
+  ],
+  "nativeRecovery": {
+    "before": {
+      "operationId": "c40b30ae-71ad-442f-a2b1-2b65a9f7d6b1",
+      "ownership": {
+        "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+        "resource": {
+          "kind": "sandbox_project",
+          "id": "92c0c67d-1bc4-4d2d-97ac-90eb3f21ff18"
+        },
+        "generation": 0,
+        "owner": null
+      },
+      "action": "delete_sandbox_project",
+      "state": "needs_recovery",
+      "errorCode": "project_cleanup_incomplete"
+    },
+    "after": {
+      "operationId": "c40b30ae-71ad-442f-a2b1-2b65a9f7d6b1",
+      "ownership": {
+        "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+        "resource": {
+          "kind": "sandbox_project",
+          "id": "92c0c67d-1bc4-4d2d-97ac-90eb3f21ff18"
+        },
+        "generation": 0,
+        "owner": null
+      },
+      "action": "delete_sandbox_project",
+      "state": "succeeded",
+      "errorCode": null
+    },
+    "checks": [
+      "real filesystem failure",
+      "CLI status discovery",
+      "same operation and project UUID after recovery",
+      "immutable completed retry",
+      "borrowed source retained"
+    ],
+    "cliSha256": "77dfac17b274973de8f1d3c558cccb669cb534ea3379f28076f1d84104aaf1fb"
+  },
+  "sourceRemoval": {
+    "operation": {
+      "operationId": "ee995f2c-73dd-4eee-bf2f-73a37583980c",
+      "ownership": {
+        "endpointId": "dc65eb68-5599-45f4-8c7d-39b16b0dbbe6",
+        "resource": {
+          "kind": "stack_source",
+          "id": "b4ca767b-159b-4d55-8998-2f51355e3db1"
+        },
+        "generation": 0,
+        "owner": null
+      },
+      "action": "delete_stack_source",
+      "state": "succeeded",
+      "errorCode": null,
+      "configurationGeneration": 1
+    },
+    "recreatedGeneration": 3,
+    "retainedNetworkId": "62e192a9-b5d4-4ba8-8926-ef2dd88d8e19",
+    "checks": [
+      "actual CLI source removal",
+      "generation retained at 2",
+      "history retained",
+      "recreated source generation 3",
+      "old delete retry preserves recreated source",
+      "bound network retained"
+    ],
+    "fixtureObservation": "initial Git check metadata was created locally; no GitHub repository fetch"
+  },
+  "checks": [
+    "endpoint identity",
+    "43 inventory kinds; 21 transfer adapters",
+    "actual ownership read",
+    "direct PATCH rejected with 409",
+    "12 configuration kinds reject direct DELETE with 409",
+    "immutable operation acknowledgement",
+    "13 Terraform ownership records and one retained native binding in the actual dashboard",
+    "desktop dashboard",
+    "375px mobile without horizontal overflow",
+    "no browser page errors"
+  ],
+  "screenshots": [
+    {
+      "file": "iac-548-source-ownership-source-2026-10-31.png",
+      "sha256": "e6bde2c3a7b4fa62e1a95e0b88c99fd4d1794de11df788696602174e8a4e314e"
+    },
+    {
+      "file": "iac-548-source-ownership-overview-2026-10-31.png",
+      "sha256": "b886ad0f5cef1bc8459a14061a5e9d5bf783bd2fec19e5a85d7aee77e7601a16"
+    },
+    {
+      "file": "iac-548-source-ownership-desktop-2026-10-31.png",
+      "sha256": "cbb3578ca30e32cb0c58c773e874602f0746d3eb871e3630a6891b3a86944ea1"
+    },
+    {
+      "file": "iac-548-source-ownership-mobile-2026-10-31.png",
+      "sha256": "1815a330f27532e7870e2635ee8b6c359011ed113483297d1ffeffed7876f3c3"
+    }
+  ],
+  "verification": {
+    "targetedApiAndSourceRegressionsPassed": 58,
+    "actualCliTestsPassed": 5,
+    "stackTestsPassed": 45,
+    "clippy": "API, CLI and Stack all targets; -D warnings; passed",
+    "scope": "21 ownership adapters. Native journal covers project deletion and atomic Git source removal. Complete shared lifecycle and both frontends for every inventory row remain pending.",
+    "limitations": "Disposable macOS configuration/controller records; no Linux/KVM boot, Terraform provider, or real GitHub source fetch in this capture. Expanded local macOS suites were not claimed as full passes."
+  },
+  "binaries": {
+    "apiTestSha256": "63283d6a4f64076aa68e91a17aedac109fd6acb54de2ecd719acf36753ba098e",
+    "cliSha256": "77dfac17b274973de8f1d3c558cccb669cb534ea3379f28076f1d84104aaf1fb",
+    "wasm": [
+      {
+        "file": "firecrab_frontend_bg-rBhAnhF3.wasm",
+        "sha256": "83eacf10fe38810fc3e836c1411f967cd14b9d9f492f3d2f40c5fbcf91827404"
+      }
+    ]
+  }
+}

@@ -30,7 +30,6 @@ use crate::model::{
     UpdateVmResourcesRequest, VmRecord, VmState,
 };
 use crate::network_policy::EgressPolicy;
-use crate::persistence::PersistenceError;
 use crate::rootfs;
 use crate::server::RequestId;
 use crate::state::AppState;
@@ -311,6 +310,30 @@ pub(crate) async fn create_vm_from_template(
     id: Uuid,
     template: Option<std::sync::Arc<crate::templates::TemplateVersion>>,
 ) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    create_vm_from_template_checked(state, request_id, req, id, template, None).await
+}
+
+/// Create only the broker UUID granted by the original parent controller.
+pub(crate) async fn create_database_broker_vm(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateVmRequest,
+    id: Uuid,
+    authority: crate::persistence::BrokerVmGrant,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    let template = state.templates.resolve_alias(&req.template);
+    create_vm_from_template_checked(state, request_id, req, id, template, Some(authority)).await
+}
+
+/// Keep ordinary validation while carrying a private parent grant to insertion.
+async fn create_vm_from_template_checked(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateVmRequest,
+    id: Uuid,
+    template: Option<std::sync::Arc<crate::templates::TemplateVersion>>,
+    authority: Option<crate::persistence::BrokerVmGrant>,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
     let fields = validate_create_for(&req, template.as_deref(), &state);
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
@@ -327,13 +350,14 @@ pub(crate) async fn create_vm_from_template(
     // actually used, which is the point that matters for catching a
     // tampered/corrupted artifact.
     let template = template.ok_or_else(|| AppError::internal(request_id.0))?;
-    let response = insert_vm(
+    let response = insert_vm_checked(
         &state,
         request_id,
         id,
         req,
         &template,
         crate::model::VmPurpose::Instance,
+        authority,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(response)))
@@ -350,6 +374,19 @@ pub(crate) async fn insert_vm(
     req: CreateVmRequest,
     template: &crate::templates::TemplateVersion,
     purpose: crate::model::VmPurpose,
+) -> Result<VmResponse, AppError> {
+    insert_vm_checked(state, request_id, id, req, template, purpose, None).await
+}
+
+/// Insert parent-owned VMs only after an atomic final authority check.
+async fn insert_vm_checked(
+    state: &AppState,
+    request_id: RequestId,
+    id: Uuid,
+    req: CreateVmRequest,
+    template: &crate::templates::TemplateVersion,
+    purpose: crate::model::VmPurpose,
+    authority: Option<crate::persistence::BrokerVmGrant>,
 ) -> Result<VmResponse, AppError> {
     let _cluster_admission = if state.cluster.worker.is_some() {
         Some(state.cluster.admission.lock().await)
@@ -375,6 +412,7 @@ pub(crate) async fn insert_vm(
         template_kernel_sha256: template.kernel.sha256().to_owned(),
         template_rootfs_sha256: template.rootfs.sha256().to_owned(),
         template_boot_args_sha256: template.boot_args_sha256(),
+        boot_pin: Some(template.stack_pin()),
         ram: req.ram,
         cpu: req.cpu,
         disk_gb: req.disk_gb,
@@ -395,37 +433,49 @@ pub(crate) async fn insert_vm(
     let shell_ids = req.shell_ids.clone();
     let port_forwards = req.port_forwards.clone();
     let insert_result = tokio::task::spawn_blocking(move || {
-        store.insert(&record)?;
-        if !req.block_storages.is_empty() {
-            store.attach_block_storages(record.id, &req.block_storages)?;
-        }
-        if !shell_ids.is_empty() {
-            let pins = store.resolve_latest_shell_revisions(&shell_ids)?;
-            store.set_vm_shells(record.id, &pins)?;
-        }
-        if !port_forwards.is_empty() {
-            store.set_vm_port_forwards(record.id, &port_forwards)?;
-        }
-        Ok::<_, crate::persistence::PersistenceError>(())
+        let inserted = if let Some(authority) = authority {
+            store.insert_database_broker_vm(&record, &authority)
+        } else {
+            store.insert(&record)
+        };
+        inserted.map_err(|error| (error, false))?;
+        let prepare = || {
+            if !req.block_storages.is_empty() {
+                store.attach_block_storages(record.id, &req.block_storages)?;
+            }
+            if !shell_ids.is_empty() {
+                let pins = store.resolve_latest_shell_revisions(&shell_ids)?;
+                store.set_vm_shells(record.id, &pins)?;
+            }
+            if !port_forwards.is_empty() {
+                store.set_vm_port_forwards(record.id, &port_forwards)?;
+            }
+            Ok::<_, crate::persistence::PersistenceError>(())
+        };
+        prepare().map_err(|error| (error, true))
     })
     .await
     .map_err(|_| AppError::internal(request_id.0))?;
 
-    if let Err(error) = insert_result {
+    if let Err((error, inserted)) = insert_result {
         // `store.insert` above already committed on its own — it isn't in
         // the same transaction as the shells/port-forwards writes that
         // follow it — so a failure there has to be undone explicitly or a
         // validation-error response would still leave an orphaned VM row
         // behind. Same compensating pattern as the subnet-resolution
         // failure below.
-        let store = state.store.clone();
-        let vm_id = vm.id;
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = store.clear_vm_shells(vm_id);
-            let _ = store.clear_vm_port_forwards(vm_id);
-            store.delete(vm_id)
-        })
-        .await;
+        // A rejected authority or duplicate UUID inserted nothing. Its existing
+        // record and pinned resources must never enter this compensation path.
+        if inserted {
+            let store = state.store.clone();
+            let vm_id = vm.id;
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = store.clear_vm_shells(vm_id);
+                let _ = store.clear_vm_port_forwards(vm_id);
+                store.delete(vm_id)
+            })
+            .await;
+        }
         return Err(match error {
             crate::persistence::PersistenceError::BlockStorageConflict { message } => {
                 AppError::conflict("volume_conflict", message, request_id.0)
@@ -587,6 +637,20 @@ pub(crate) async fn resume_cluster_delete(
     storage: &str,
     request: RequestId,
 ) -> Result<(), AppError> {
+    let store = state.store.clone();
+    let completed =
+        super::stacks::database(request.0, move || store.completed_vm_delete(id)).await?;
+    if let Some(completed) = completed {
+        return if completed.storage_root() == storage {
+            Ok(())
+        } else {
+            Err(AppError::conflict(
+                "cluster_cleanup_identity_changed",
+                "the completed native cleanup has a different original storage identity",
+                request.0,
+            ))
+        };
+    }
     if !state.storage_root_known(storage) {
         return Err(AppError::conflict(
             "storage_missing",
@@ -1374,8 +1438,21 @@ pub(crate) async fn delete_vm_with_disk_policy(
     retain_disks: bool,
     stack_operation: Option<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    let _guard = state.lock_vm(id).await;
-    ensure_no_active_sandbox_previews(&state, id, request_id.0)?;
+    super::vm_deletion::execute(state, request_id, id, retain_disks, stack_operation).await
+}
+
+/// The caller holds the VM lock through admission and cleanup.
+pub(crate) fn prepare_vm_delete(
+    state: &AppState,
+    request_id: RequestId,
+    id: Uuid,
+    stack_operation: Option<Uuid>,
+) -> Result<VmRecord, AppError> {
+    state
+        .store
+        .ensure_vm_attachments_unmanaged(id)
+        .map_err(|error| super::stacks::persistence_error(error, request_id.0))?;
+    ensure_no_active_sandbox_previews(state, id, request_id.0)?;
     if state
         .store
         .managed_database_rabbitmq()
@@ -1412,7 +1489,7 @@ pub(crate) async fn delete_vm_with_disk_policy(
                 )
             })?;
         if has_volumes
-            || crate::network_policy::vm_is_active(&state, &vm)
+            || crate::network_policy::vm_is_active(state, &vm)
                 .map_err(|_| AppError::internal(request_id.0))?
         {
             return Err(AppError::conflict(
@@ -1422,15 +1499,16 @@ pub(crate) async fn delete_vm_with_disk_policy(
             ));
         }
     }
-    if (vm.security_group_id.is_some() || has_volumes)
-        && crate::network_policy::vm_is_active(&state, &vm)
-            .map_err(|_| AppError::internal(request_id.0))?
+    if crate::network_policy::vm_is_active(state, &vm)
+        .map_err(|_| AppError::internal(request_id.0))?
     {
         return Err(AppError::conflict(
             if has_volumes {
                 "volume_vm_active"
-            } else {
+            } else if vm.security_group_id.is_some() {
                 "security_group_in_use"
+            } else {
+                "vm_runtime_active"
             },
             "stop the VM host runtime before deleting it",
             request_id.0,
@@ -1439,6 +1517,19 @@ pub(crate) async fn delete_vm_with_disk_policy(
     if !vm.state.can_delete() {
         return Err(AppError::invalid_state(vm.state, request_id.0));
     }
+    Ok(vm)
+}
+
+/// Admission is durable before any log drain, host teardown or artifact removal.
+pub(crate) async fn delete_vm_admitted(
+    state: AppState,
+    request_id: RequestId,
+    native: crate::persistence::iac_vm_deletes::VmDeleteIntent,
+) -> Result<StatusCode, AppError> {
+    let id = Uuid::parse_str(&native.operation.ownership.resource.id)
+        .map_err(|_| AppError::internal(request_id.0))?;
+    let retain_disks = native.retain_disks;
+    super::vm_deletion::check_storage(&state, &native, request_id.0)?;
     // Capture the final buffered application output before removing artifacts.
     // A damaged log buffer must never prevent VM cleanup.
     if !matches!(
@@ -1456,6 +1547,16 @@ pub(crate) async fn delete_vm_with_disk_policy(
         )
         .await;
     }
+    state
+        .store
+        .validate_native_vm_delete(&native)
+        .map_err(|error| super::stacks::persistence_error(error, request_id.0))?;
+    super::vm_deletion::teardown(&state, &native, request_id.0).await?;
+    let storage = native
+        .storage_proof()
+        .cloned()
+        .ok_or_else(|| AppError::internal(request_id.0))?;
+    let storage_root = super::vm_deletion::check_storage(&state, &native, request_id.0)?;
     let removed = {
         let mut vms = state
             .vms
@@ -1470,46 +1571,26 @@ pub(crate) async fn delete_vm_with_disk_policy(
         vms.remove(&id).expect("record checked under the same lock")
     };
 
-    // A VM may be stopped because the guest exited or because the API was
-    // recovering from an interrupted lifecycle. In both cases its TAP and
-    // nft policy can still exist even though no process is currently tracked.
-    // Tear them down before releasing the lease, so a later VM cannot be
-    // assigned an address that host firewall state still points at. This is
-    // deliberately best-effort: deletion must still be able to remove a
-    // corrupt/partially-created VM record, and `teardown_vm_network` logs
-    // any helper-side failure for recovery diagnostics.
-    teardown_vm_network(&state, id).await;
-
     let store = state.store.clone();
-    let artifact_paths =
-        crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&removed.storage_root), id);
+    let expected = native.operation.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        store
+            .validate_native_vm_delete(&native)
+            .map_err(|error| error.to_string())?;
         // Retaining the VM keeps its private artifact tree, including runtime
         // logs and disks. Otherwise remove the whole tree before its record.
-        if let Err(error) = if retain_disks {
-            Ok(())
+        if if retain_disks {
+            storage.check(&storage_root)
         } else {
-            crate::artifacts::remove_vm_artifacts(&artifact_paths)
-        } {
-            return Err(format!(
-                "failed to remove {}: {error}",
-                artifact_paths.dir.display()
-            ));
+            storage.remove(&storage_root)
         }
-        match store.delete(id) {
-            Ok(()) | Err(PersistenceError::MissingVm { .. }) => {}
-            Err(error) => return Err(error.to_string()),
+        .is_err()
+        {
+            return Err("original VM cleanup storage is unavailable or changed".into());
         }
-        // Only ever freed here, after everything else about the VM is gone
-        // — see Store::active_lease's doc comment. NotLeased shouldn't
-        // happen (every VM gets one at create_vm), but isn't worth failing
-        // an otherwise-successful delete over.
-        let _ = store.clear_vm_shells(id);
-        let _ = store.clear_vm_port_forwards(id);
-        match store.release_lease(id) {
-            Ok(()) | Err(IpamError::NotLeased { .. }) => Ok(()),
-            Err(error) => Err(error.to_string()),
-        }
+        store
+            .finish_native_vm_delete(&native)
+            .map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| error.to_string())
@@ -1517,11 +1598,7 @@ pub(crate) async fn delete_vm_with_disk_policy(
 
     if let Err(reason) = result {
         tracing::error!(request_id = %request_id.0, vm_id = %id, reason, "vm delete failed");
-        state
-            .vms
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(id, removed);
+        super::vm_deletion::restore_failed_cleanup(&state, removed, &expected);
         return Err(AppError::internal(request_id.0));
     }
     state
@@ -1661,20 +1738,14 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     let vm_id = vm.id;
     let approved_template = template.clone();
     let templates = state.templates.clone();
+    let approved_vm = vm.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let pin = store.stack_vm_pin(vm_id, true)
             .map_err(|_| "Could not read approved stack template".to_owned())?;
-        let Some(pin) = pin else { return Ok(()); };
-        if pin != approved_template.stack_pin() {
+        if pin.is_some_and(|pin| pin != approved_template.stack_pin()) {
             return Err("Approved stack template content changed; restore its exact artifacts before starting the VM".into());
         }
-        for artifact in std::iter::once(&approved_template.kernel)
-            .chain(std::iter::once(&approved_template.rootfs))
-            .chain(approved_template.initrd.iter())
-        {
-            templates.open_verified(artifact)
-                .map_err(|_| "Approved stack template artifact changed; restore its exact bytes before starting the VM".to_owned())?;
-        }
+        crate::vm_boot::verify(&approved_vm, &templates, &approved_template)?;
         Ok(())
     })
         .await
@@ -3170,6 +3241,7 @@ pub(crate) mod test_support {
             template_kernel_sha256: String::new(),
             template_rootfs_sha256: String::new(),
             template_boot_args_sha256: String::new(),
+            boot_pin: None,
             cpu: 1,
             ram: 128,
             // 0 keeps `run_start`'s disk grow step a no-op against this
@@ -3251,6 +3323,19 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn seed_vm(state: &AppState, vm: &VmRecord) {
+        let mut fixture = vm.clone();
+        if fixture.template_kernel_sha256.is_empty()
+            && fixture.template_rootfs_sha256.is_empty()
+            && let Some(template) = state
+                .templates
+                .resolve_version(&fixture.template, &fixture.template_version)
+        {
+            fixture.template_kernel_sha256 = template.kernel.sha256().to_owned();
+            fixture.template_rootfs_sha256 = template.rootfs.sha256().to_owned();
+            fixture.template_boot_args_sha256 = template.boot_args_sha256();
+            fixture.boot_pin = Some(template.stack_pin());
+        }
+        let vm = &fixture;
         // A VM with a lease must also belong to a real persisted network.
         // Keep unknown-network failure fixtures explicit rather than weakening
         // the production DNS-posture lookup during VM specialization.
@@ -3720,6 +3805,7 @@ mod tests {
     }
 
     fn seed_console_log(state: &AppState, vm: &mut VmRecord, contents: impl AsRef<[u8]>) {
+        *vm = state.store.load_all().unwrap().remove(&vm.id).unwrap();
         let runtime_id = Uuid::new_v4();
         let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.runtime.vms_dir, vm.id);
         let runtime = paths.create_runtime(runtime_id).unwrap();
@@ -5443,6 +5529,47 @@ while True:
             firecrab_helper_protocol::network::guest_hostname(created.id)
         );
         assert_eq!(created.egress_policy, EgressPolicy::Internet);
+    }
+
+    #[tokio::test]
+    async fn iac_vm_rejected_duplicate_create_preserves_original_record_address_and_runtime_inputs()
+    {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let network = seed_network(&state).await;
+        let (_, Json(original)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(create_request_on("original", network)),
+        )
+        .await
+        .unwrap();
+        let saved = state
+            .store
+            .load_all()
+            .unwrap()
+            .remove(&original.id)
+            .unwrap();
+        let lease = state.store.active_lease(original.id).unwrap().unwrap();
+        assert!(
+            create_vm_with_id(
+                state.clone(),
+                RequestId(Uuid::new_v4()),
+                create_request_on("duplicate", network),
+                original.id
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            state.store.load_all().unwrap().get(&original.id),
+            Some(&saved)
+        );
+        assert_eq!(
+            state.store.active_lease(original.id).unwrap().unwrap().ipv4,
+            lease.ipv4
+        );
+        assert_eq!(state.vms.lock().unwrap().get(&original.id), Some(&saved));
     }
 
     #[tokio::test]

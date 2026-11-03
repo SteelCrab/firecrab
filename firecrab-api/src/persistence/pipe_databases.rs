@@ -1,7 +1,9 @@
 //! Credentials live in the existing owner-only SQLite store, never in responses.
 
 use super::{PersistenceError, Store};
-use crate::pipe_databases::{DatabaseInput, DatabaseRecord};
+#[cfg(test)]
+use crate::pipe_databases::DatabaseInput;
+use crate::pipe_databases::DatabaseRecord;
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
@@ -12,19 +14,66 @@ pub(super) const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS pipe_datab
 ) STRICT";
 
 impl Store {
+    /// Capture authority before remote connection verification or namespace setup.
+    #[cfg(test)]
+    pub(crate) fn pipe_database_write_authority(
+        &self,
+        id: Uuid,
+    ) -> Result<firecrab_stack::ResourceOwnership, PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let resource = firecrab_stack::ManagedResource {
+            kind: "database_connection".into(),
+            id: id.to_string(),
+        };
+        if !super::iac_owners::public_write_allowed(&tx, &resource)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        let snapshot = super::iac_owners::read(&tx, &resource)?;
+        tx.commit()?;
+        Ok(snapshot)
+    }
+
+    #[cfg(test)]
     pub fn update_pipe_database(
         &self,
         id: Uuid,
         input: &DatabaseInput,
     ) -> Result<bool, PersistenceError> {
+        let authority = self.pipe_database_write_authority(id)?;
+        self.update_pipe_database_checked(id, input, &authority)
+    }
+
+    /// Late validation cannot replace credentials after an ownership release/reclaim.
+    #[cfg(test)]
+    pub(crate) fn update_pipe_database_checked(
+        &self,
+        id: Uuid,
+        input: &DatabaseInput,
+        expected: &firecrab_stack::ResourceOwnership,
+    ) -> Result<bool, PersistenceError> {
         let spec = serde_json::to_string(input).map_err(|_| PersistenceError::CorruptRecord {
             id: id.to_string(),
             reason: "invalid database configuration".into(),
         })?;
-        Ok(self.lock().execute(
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let resource = firecrab_stack::ManagedResource {
+            kind: "database_connection".into(),
+            id: id.to_string(),
+        };
+        if super::iac_owners::read(&tx, &resource)? != *expected {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        if !super::iac_owners::public_write_allowed(&tx, &resource)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        let changed = tx.execute(
             "UPDATE pipe_databases SET spec=?2 WHERE id=?1",
             params![id.to_string(), spec],
-        )? != 0)
+        )?;
+        tx.commit()?;
+        Ok(changed != 0)
     }
     /// Return all saved connection inputs in insertion order.
     pub fn list_pipe_databases(&self) -> Result<Vec<DatabaseRecord>, PersistenceError> {
@@ -119,7 +168,8 @@ impl Store {
         row.map(|(id, spec)| decode(id, spec)).transpose()
     }
 
-    /// Persist a connection after its credentials have been authenticated.
+    /// Seed a connection in tests; production uses durable admission and completion.
+    #[cfg(test)]
     pub fn save_pipe_database(
         &self,
         id: Uuid,
@@ -139,7 +189,19 @@ impl Store {
     /// Remove only saved credentials and report whether a record existed.
     pub fn delete_pipe_database(&self, id: Uuid) -> Result<bool, PersistenceError> {
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let resource = firecrab_stack::ManagedResource {
+            kind: "database_connection".into(),
+            id: id.to_string(),
+        };
+        if !super::iac_owners::public_write_allowed(&tx, &resource)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        super::iac_resources::database_idle(&tx, &resource)?;
+        let referenced: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM database_bindings WHERE database_id=?1) OR EXISTS(SELECT 1 FROM database_triggers WHERE json_extract(spec,'$.databaseId')=?1) OR EXISTS(SELECT 1 FROM database_jobs WHERE database_id=?1 AND json_extract(spec,'$.kind')='backup' AND json_extract(spec,'$.status')='succeeded')", [id.to_string()], |r| r.get(0))?;
+        if referenced {
+            return Err(PersistenceError::IacResourceBusy);
+        }
         tx.execute(
             "DELETE FROM service_security_database_links WHERE database_id=?1",
             [id.to_string()],
@@ -147,22 +209,6 @@ impl Store {
         let deleted = tx.execute("DELETE FROM pipe_databases WHERE id=?1", [id.to_string()])? > 0;
         tx.commit()?;
         Ok(deleted)
-    }
-
-    pub fn set_database_writes(&self, id: Uuid, enabled: bool) -> Result<bool, PersistenceError> {
-        let Some(mut record) = self.pipe_database(id)? else {
-            return Ok(false);
-        };
-        record.input.write_enabled = enabled;
-        let spec =
-            serde_json::to_string(&record.input).map_err(|_| PersistenceError::CorruptRecord {
-                id: id.to_string(),
-                reason: "invalid database configuration".into(),
-            })?;
-        Ok(self.lock().execute(
-            "UPDATE pipe_databases SET spec=?2 WHERE id=?1",
-            params![id.to_string(), spec],
-        )? != 0)
     }
 }
 

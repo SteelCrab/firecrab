@@ -274,6 +274,8 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
     // Before anything changes, so declining the download leaves the host as it was.
     let manifest = installation_manifest(&layout.managed_home)?;
     let artifacts = provision::download_all(&layout.managed_home, &manifest, assume_yes)?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     if reinstall {
         daemon::uninstall(&layout)?;
         managed_home::clear_installation_state(&layout.managed_home)?;
@@ -355,6 +357,8 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
 
 fn run_start() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     if super::controller::configured(&layout.managed_home) {
         super::controller::start(&layout.managed_home)?;
         report!("[PASS] microManager: running (automatic wake enabled)");
@@ -376,6 +380,8 @@ fn run_start() -> Result<i32, Error> {
 
 fn run_repair() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     let status = repair::run(&layout)?;
     print_daemon_status(&status, &layout);
     report!("[PASS] guest boot report and local API: ready");
@@ -500,6 +506,8 @@ fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
 
 fn run_stop() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     if super::controller::active(&layout.managed_home) {
         super::controller::stop(&layout.managed_home)?;
         report!("[PASS] microManager: manually stopped (automatic wake blocked)");
@@ -1055,6 +1063,8 @@ fn wait_for_provisioning(
 
 fn run_uninstall(purge: bool) -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     if purge {
         lifecycle::validate_purge(&layout)?;
     }

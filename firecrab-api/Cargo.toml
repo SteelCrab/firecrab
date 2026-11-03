@@ -16,7 +16,7 @@ chrono-tz = "0.10.4"
 cron = "0.17.0"
 hmac = "0.12"
 firecrab-api-types = { path = "../firecrab-api-types" }
-firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
+firecrab-helper-protocol = { path = "../firecrab-helper-protocol", features = ["native-transport"] }
 firecrab-stack = { path = "../firecrab-stack" }
 filetime = "0.2.29"
 futures-util = "0.3"

@@ -1682,18 +1682,44 @@ mod tests {
     async fn run_bootstrap_script_fails_when_no_shell_answers_the_console_probe() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        // Deliberately `Created`, not `Running`, even though a real builder
-        // VM would be `Running` here: this is the one test that needs a
-        // registered `VmProcess` (for its console), and that fixture's `pid`
-        // is 0 — so letting the teardown reach `stop_vm` would have it call
-        // `kill(0, SIGTERM)`, which signals the *entire process group*, test
-        // runner included. `run_bootstrap_script` never reads the VM's
-        // lifecycle state, so `Created` exercises the identical code path
-        // while keeping teardown on the delete-only branch.
-        let vm = seed_builder_vm(&state, VmState::Created);
-        // A console that is subscribed to but never answers — exactly what a
-        // tty with no shell reading it looks like from the host.
-        let _console = register_fake_process(&state, vm.id);
+        let vm = seed_builder_vm(&state, VmState::Running);
+        // A real disposable child gives the fake shim a safe positive PID. The
+        // silent console still times out in virtual time; OS cleanup uses real time.
+        let mut child = tokio::process::Command::new("/bin/sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().expect("owned disposable child PID");
+        let console = Arc::new(ConsoleBroker::new());
+        let (exited, observed) = watch::channel(false);
+        let (control, mut requests) = crate::vm_shim::client::ShimControl::for_test();
+        state.processes.lock().unwrap().insert(
+            vm.id,
+            VmProcess {
+                pid,
+                exited: observed,
+                console,
+                control,
+            },
+        );
+        let cleanup_state = state.clone();
+        let vm_id = vm.id;
+        tokio::spawn(async move {
+            while let Some(request) = requests.recv().await {
+                if matches!(
+                    request,
+                    crate::vm_shim::protocol::ShimRequest::Terminate
+                        | crate::vm_shim::protocol::ShimRequest::Kill
+                ) {
+                    tokio::time::resume();
+                    child.kill().await.unwrap();
+                    cleanup_state.processes.lock().unwrap().remove(&vm_id);
+                    let _ = exited.send(true);
+                    break;
+                }
+            }
+        });
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
@@ -1704,6 +1730,7 @@ mod tests {
 
         run_bootstrap_script(&state, bootstrap_id, vm.id).await;
 
+        assert!(!state.processes.lock().unwrap().contains_key(&vm.id));
         let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
         assert_eq!(snapshot.status, BootstrapStatus::Failed);
         assert!(

@@ -150,6 +150,8 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
     lifecycle::prepare(&layout)?;
     // Before the service stops, so declining the download leaves it running.
     let artifacts = provision::download_all(&host, &layout.downloads(), assume_yes)?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     if reinstall {
         daemon::uninstall(&layout)?;
         managed_home::clear_installation_state(&layout.managed_home)?;
@@ -207,6 +209,8 @@ fn run_start() -> Result<i32, Error> {
     #[cfg(target_os = "windows")]
     {
         let layout = lifecycle::Layout::from_process_env()?;
+        let _installation = crate::native_host::installation_guard(&layout.managed_home)
+            .map_err(super::resource::Error::from)?;
         if super::controller::configured(&layout.managed_home) {
             super::controller::start(&layout.managed_home)?;
             println!("[PASS] microManager: running (automatic wake enabled)");
@@ -217,6 +221,8 @@ fn run_start() -> Result<i32, Error> {
         return Err(daemon::Error::NotInstalled.into());
     }
     let layout = lifecycle::Layout::from_process_env()?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     daemon::install(&layout)?;
     let status = daemon::start()?;
     print_daemon_status(&status);
@@ -311,6 +317,8 @@ fn run_stop() -> Result<i32, Error> {
     #[cfg(target_os = "windows")]
     match lifecycle::Layout::from_process_env() {
         Ok(layout) => {
+            let _installation = crate::native_host::installation_guard(&layout.managed_home)
+                .map_err(super::resource::Error::from)?;
             if super::controller::active(&layout.managed_home) {
                 super::controller::stop(&layout.managed_home)?;
                 println!("[PASS] microManager: manually stopped (automatic wake blocked)");
@@ -579,6 +587,8 @@ pub(crate) fn run_guest_command(
 /// Without `--purge` the distribution stays registered, so its Firecrab data
 /// and the managed home survive for the next install, as on macOS.
 fn run_uninstall(layout: &lifecycle::Layout, purge: bool) -> Result<i32, Error> {
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     #[cfg(target_os = "windows")]
     super::controller::uninstall(&layout.managed_home)?;
     if purge {

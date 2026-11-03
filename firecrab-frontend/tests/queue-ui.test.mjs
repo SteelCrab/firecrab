@@ -102,3 +102,99 @@ test("Queue setup keeps edits across polling and validation, then creates the en
     await fixture.close();
   }
 });
+
+for (const recoveryState of ["needs_recovery", "running", "unavailable"]) {
+  test(`Queue engine uses the original operation when recovery is ${recoveryState}`, async () => {
+    const fixture = await createFixtureServer(
+      fileURLToPath(new URL("../dist", import.meta.url)),
+      0,
+    );
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    let phase = "failed";
+    fixture.handlers.set("GET /api/queue/engine", ({ send }) =>
+      send(200, {
+        vmId: "original-broker",
+        phase,
+        error:
+          phase === "failed" ? "The existing engine requires recovery" : null,
+      }),
+    );
+    fixture.handlers.set("GET /api/queues", ({ send }) => send(200, []));
+    fixture.handlers.set(
+      "GET /api/iac/native-operations/resources/queue_engine/original-broker",
+      ({ send }) => {
+        if (recoveryState === "unavailable")
+          return send(503, {
+            error: { message: "Recovery status unavailable" },
+          });
+        send(200, [
+          { operationId: "completed-old-action", state: "succeeded" },
+          {
+            operationId: "original-operation",
+            state: recoveryState,
+            executionGeneration: 3,
+            ownership: { endpointId: "queue-endpoint" },
+          },
+        ]);
+      },
+    );
+    fixture.handlers.set(
+      "POST /api/iac/native-operations/original-operation/recover",
+      ({ req, send }) => {
+        if (
+          req.headers["x-firecrab-endpoint-id"] !== "queue-endpoint" ||
+          req.headers["x-firecrab-execution-generation"] !== "3"
+        )
+          throw new Error("missing original recovery preconditions");
+        phase = "starting";
+        send(200, { operationId: "original-operation", state: "running" });
+      },
+    );
+    try {
+      await page.goto(`${fixture.url}/#/queues`);
+      if (recoveryState === "unavailable") {
+        await expect(page.getByRole("alert")).toContainText(
+          "Recovery status unavailable",
+        );
+        await expect(
+          page.getByRole("button", { name: "Start / recover", exact: true }),
+        ).toHaveCount(0);
+      } else {
+        const button = page.getByRole("button", {
+          name: "Recover engine",
+          exact: true,
+        });
+        if (recoveryState === "running") {
+          await expect(button).toBeDisabled();
+        } else {
+          await expect(button).toBeEnabled();
+          await button.click();
+          await expect(
+            page.getByRole("region", { name: "Queue engine" }),
+          ).toContainText("Starting");
+          assert.equal(
+            fixture.requests.filter(
+              ({ method, path }) =>
+                method === "POST" &&
+                path ===
+                  "/api/iac/native-operations/original-operation/recover",
+            ).length,
+            1,
+          );
+        }
+      }
+      assert.equal(
+        fixture.requests.filter(
+          ({ method, path }) =>
+            method === "POST" && path === "/api/queue/engine/start",
+        ).length,
+        0,
+      );
+    } finally {
+      await page.close();
+      await browser.close();
+      await fixture.close();
+    }
+  });
+}

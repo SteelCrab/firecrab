@@ -1,0 +1,62 @@
+{
+  "sourceCommit": "4def77cecf3cfe65d33c282f5d7a2b74a780022e",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-03",
+  "platform": "linux/arm64",
+  "rustVersion": "1.97.1",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "profile": "release",
+  "buildEnvironment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "results": {
+    "tlsStartup": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "vmShim": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    "api": {
+      "passed": 1902,
+      "failed": 0,
+      "ignored": 27
+    }
+  },
+  "artifacts": [
+    {
+      "file": "vm_shim_subcommand-df07976ac27f236c",
+      "sha256": "cc45168018fdbd51b3f11781dda4cdfe51eaf75eefb24439b56ab4ac2e8a2b88"
+    },
+    {
+      "file": "tls_startup-3f0f7ebf2f315d5f",
+      "sha256": "c45db94b430ed61e71cc923bc22a5727242a7c6e42392e5514107c1be06a5121"
+    },
+    {
+      "file": "firecrab_api-ddca5945616d069a",
+      "sha256": "25c7530ee0c870337fc360ca52f2dfa29966e57a6e107b541a8694c54ec31a60"
+    }
+  ],
+  "logs": {
+    "buildSha256": "c9eff530d5116621fde380ad4502812b80c44221b4fdbb189418ab9f92d7cbbf",
+    "testSha256": "7c498493f04f077be5d0de830507601c4b49aa4dfe738bd886dda05de9cf3e9f",
+    "clippySha256": "3f7f816dc65d28afa31aca4c7d0a641a405a3b312a475a9afca794b89000671c"
+  },
+  "githubActions": [
+    {
+      "id": 41606180493,
+      "name": "CI",
+      "conclusion": "success"
+    },
+    {
+      "id": 41606180430,
+      "name": "Release Build",
+      "conclusion": "success"
+    }
+  ],
+  "scope": "Full Linux Release API/TLS/VM-shim suite and strict Clippy for the first shared typed Shell plan/executor, durable UUID/receipt schema and original storage/ECR cohorts. Source predates the AI-model adapter. Protocol/API/SQLite fixtures are not full Stack YAML or Terraform provider runs, nor every-row live KVM/controller acceptance."
+}

@@ -349,6 +349,28 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(sleep.call_count, 2)
         self.assertIn("::warning::log of job 8: HTTP 404", output.getvalue())
 
+    def test_a_disconnected_log_download_is_retried(self) -> None:
+        with mock.patch.object(self.github, "request", side_effect=[report.http.client.RemoteDisconnected(), b"recovered log"]) as request, mock.patch.object(report.time, "sleep") as sleep:
+            self.assertEqual(self.github.job_log(9), "recovered log")
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once_with(5)
+
+    def test_an_incomplete_log_is_reported_without_losing_the_build_result(self) -> None:
+        output = io.StringIO()
+        with mock.patch.object(self.github, "request", side_effect=report.http.client.IncompleteRead(b"partial")) as request, mock.patch.object(report.time, "sleep") as sleep, redirect_stdout(output):
+            self.assertIsNone(self.github.job_log(9))
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertIn("download unavailable after retries", output.getvalue())
+        self.assertNotIn("partial", output.getvalue())
+
+    def test_a_forbidden_log_is_not_retried(self) -> None:
+        failure = urllib.error.HTTPError("fixture",403,"forbidden",None,None)
+        with mock.patch.object(self.github, "request", side_effect=failure) as request, mock.patch.object(report.time, "sleep") as sleep, redirect_stdout(io.StringIO()):
+            self.assertIsNone(self.github.job_log(9))
+        self.assertEqual(request.call_count,1)
+        sleep.assert_not_called()
+
     def test_writes_send_json_with_the_token(self) -> None:
         self.github.request("POST", "/issues/5/comments", {"body": "hi"})
         ((method, path, token, body),) = ApiHandler.seen

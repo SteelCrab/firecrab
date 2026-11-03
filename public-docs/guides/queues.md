@@ -28,14 +28,29 @@ Firecrab prepares the private Erlang authentication file before boot with the br
 Its value is derived from the existing engine secret, so recovery can repair an empty authentication file while preserving message data.
 **Stop** pauses messaging without deleting queues, users or messages.
 **Start / recover** starts the existing VM and verifies RabbitMQ's management API.
-An interrupted initial installation can be retried with the same operation.
+Installation, start and stop reserve an operation UUID before dispatch.
+The API accepts an optional non-nil `x-firecrab-operation-id` retry key and returns it in the response.
+Reusing that key requires the same action and installation settings. A retry does not launch another worker.
+Observe the original acknowledgement at `GET /api/iac/native-operations/{id}`.
+Discover it through `GET /api/iac/native-operations/resources/queue_engine/{broker-vm-uuid}` after a lost response.
+An interrupted or failed operation retains its ownership fence across API restart.
+The dashboard shows **Recover engine** for this case. It resumes the original action.
+An authenticated operator can also use `POST /api/iac/native-operations/{id}/recover`
+or `firecrab iac recover-native-operation --id UUID`.
+Recovery retains the original VM, disk, private credentials and operation UUID.
+A new execution generation prevents an old worker from overwriting the recovery attempt.
+The operation succeeds only after the requested stop or RabbitMQ readiness is confirmed.
 A missing previously created VM is an error; Firecrab never silently replaces it with an empty broker.
 
 The VM appears in MicroVM with purpose `queue`.
-Ordinary VM mutation routes return `409 queue_owned`.
+Ordinary VM mutation routes return `409 iac_parent_managed`, including before the reserved VM has been created.
 Use Queue controls to preserve its lifecycle and data.
 The console and SSH remain available to the host administrator.
-Engine deletion, automatic upgrades and multi-node clustering are not included.
+Ownership is attached to the exact broker VM UUID under kind `queue_engine`.
+Ownership transfer preserves engine settings, credentials and data.
+Transfers reject active engine work, pending recovery and queue provisioning.
+Direct engine lifecycle changes reject Terraform ownership; request headers do not grant write authority.
+Engine deletion, automatic upgrades and multi-node clustering are not included in these Queue controls.
 
 ## Create a queue
 

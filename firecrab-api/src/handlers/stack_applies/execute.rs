@@ -22,6 +22,7 @@ use crate::extract::ValidatedJson;
 use crate::handlers::{micro_networks, micro_services, vms};
 use crate::model::{VmPurpose, VmRecord};
 use crate::server::RequestId;
+use crate::service_runtime::stack_deployment_id as deploy_operation_id;
 use crate::state::AppState;
 
 pub(super) async fn preflight(
@@ -183,7 +184,7 @@ async fn run_steps(
     let id = status.operation_id;
     status.state = ApplyState::Running;
     save(state, status).await?;
-    let current = observe(state, id).await?;
+    let current = observe(state, observed, id).await?;
     if firecrab_stack::fingerprint(stack, record, observed)
         != firecrab_stack::fingerprint(stack, record, &current)
     {
@@ -207,7 +208,7 @@ async fn run_steps(
                 stack,
                 record,
                 observed,
-                &observe(state, id).await?,
+                &observe(state, observed, id).await?,
                 change,
                 id,
             )?;
@@ -357,6 +358,18 @@ async fn execute(
             let mut desired = declared.clone();
             desired.config =
                 firecrab_stack::effective_service_config(&declared.config, current.as_ref());
+            if resume_recorded_service(
+                state,
+                id,
+                resource_id,
+                &desired.config,
+                networks[desired.network.as_str()],
+                desired.host_port,
+            )
+            .await?
+            {
+                return Ok(());
+            }
             if change.action == Action::Create {
                 let _ = micro_services::create_with_id(
                     state.clone(),
@@ -620,17 +633,42 @@ async fn supports_live_update(
     }))
 }
 
-fn deploy_operation_id(apply: Uuid, service: Uuid) -> Uuid {
-    use sha2::{Digest, Sha256};
-    let mut hash = Sha256::new();
-    hash.update(b"firecrab.stack.deploy.v1");
-    hash.update(apply.as_bytes());
-    hash.update(service.as_bytes());
-    let digest = hash.finalize();
-    let mut bytes: [u8; 16] = digest[..16].try_into().expect("SHA256 prefix");
-    bytes[6] = (bytes[6] & 15) | 128;
-    bytes[8] = (bytes[8] & 63) | 128;
-    Uuid::from_bytes(bytes)
+/// Read the exact child before choosing a new deployment strategy or changing serving state.
+async fn resume_recorded_service(
+    state: &AppState,
+    apply: Uuid,
+    service: Uuid,
+    spec: &firecrab_api_types::MicroServiceSpec,
+    network: Uuid,
+    host_port: u16,
+) -> Result<bool, AppError> {
+    let child = deploy_operation_id(apply, service);
+    let store = state.store.clone();
+    let Some(original) = database(apply, move || store.service_attempt(child)).await? else {
+        return Ok(false);
+    };
+    micro_services::ensure_stack_writer(state, service, Some(apply), apply).await?;
+    if original.service_id != service
+        || original.spec != *spec
+        || original.request.micro_network_id != Some(network)
+        || original.request.host_port != host_port
+    {
+        return Err(conflict(
+            "stack_deployment_identity_conflict",
+            "the original child operation has different deployment inputs",
+            apply,
+        ));
+    }
+    wait_service(
+        state,
+        service,
+        child,
+        true,
+        Duration::from_secs(u64::from(spec.startup_timeout) * u64::from(spec.replicas) + 1800),
+        apply,
+    )
+    .await?;
+    Ok(true)
 }
 
 pub(super) async fn wait_service(
@@ -733,10 +771,19 @@ fn exact_id(change: &Change, id: Uuid) -> Result<Uuid, AppError> {
     })
 }
 
-async fn observe(state: &AppState, id: Uuid) -> Result<Inventory, AppError> {
+async fn observe(state: &AppState, original: &Inventory, id: Uuid) -> Result<Inventory, AppError> {
     let store = state.store.clone();
     let templates = state.templates.clone();
-    database(id, move || inventory(&store, &templates)).await
+    let secret_inputs = original.secret_inputs.clone();
+    let deployment_secret_inputs = original.deployment_secret_inputs.clone();
+    database(id, move || {
+        let mut current = inventory(&store, &templates)?;
+        // Accepted work uses the original private credential snapshots, even after rotation.
+        current.secret_inputs = secret_inputs;
+        current.deployment_secret_inputs = deployment_secret_inputs;
+        Ok(current)
+    })
+    .await
 }
 
 async fn save(state: &AppState, status: &ApplyStatus) -> Result<(), AppError> {
@@ -785,6 +832,8 @@ fn verify_current(
     }
     let select = |inventory: &Inventory| Inventory {
         templates: inventory.templates.clone(),
+        secret_inputs: inventory.secret_inputs.clone(),
+        deployment_secret_inputs: inventory.deployment_secret_inputs.clone(),
         networks: inventory
             .networks
             .iter()

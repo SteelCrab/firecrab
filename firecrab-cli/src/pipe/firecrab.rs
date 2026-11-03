@@ -17,6 +17,9 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "firecrab_pending.rs"]
+mod pending;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const UNIT: &str = "firecrab-address-updater.service";
 const TEMPLATE: &str = include_str!("../../../packaging/systemd/firecrab-address-updater.service");
@@ -47,6 +50,9 @@ struct Store {
     #[serde(default)]
     protocol: RegistryProtocol,
     bindings: Vec<Binding>,
+    /// Parent intent is durable before a generated connector can become visible.
+    #[serde(default)]
+    pending: Vec<pending::PreparedAddress>,
 }
 fn seconds() -> u64 {
     SystemTime::now()
@@ -80,8 +86,12 @@ fn endpoint(value: &str) -> Result<String> {
     Ok(url.origin().ascii_serialization())
 }
 fn read() -> Result<Store> {
-    if path().exists() {
-        let store: Store = serde_json::from_slice(&fs::read(path())?)?;
+    read_at(&path())
+}
+/// Read the broker-selected root throughout a native transaction.
+fn read_at(path: &Path) -> Result<Store> {
+    if path.exists() {
+        let store: Store = serde_json::from_slice(&fs::read(path)?)?;
         endpoint(&store.endpoint)?;
         return Ok(store);
     }
@@ -91,6 +101,7 @@ fn read() -> Result<Store> {
         )?,
         protocol: RegistryProtocol::default(),
         bindings: vec![],
+        pending: vec![],
     })
 }
 fn write(store: &Store) -> Result<()> {
@@ -108,11 +119,12 @@ fn write_at(path: &Path, store: &Store) -> Result<()> {
     temporary.write_all(&serde_json::to_vec(store)?)?;
     temporary.as_file().sync_all()?;
     temporary.persist(path)?;
+    fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
 // Remote address operations use a separate lock so a service outage does not block route saves.
-fn address_lock() -> Result<fs::File> {
+pub(super) fn address_lock() -> Result<fs::File> {
     use fs2::FileExt;
     let file = fs::OpenOptions::new()
         .create(true)
@@ -124,6 +136,29 @@ fn address_lock() -> Result<fs::File> {
         .map_err(|_| "Another Firecrab address change is running; retry shortly")?;
     Ok(file)
 }
+
+/// Exact origin and secret-content pins; updater status is observation rather than desired input.
+pub(super) fn ownership_projections(
+    root: &Path,
+) -> Result<std::collections::BTreeMap<String, serde_json::Value>> {
+    use sha2::{Digest, Sha256};
+    let store = read_at(&root.join("pipe/firecrab-addresses.json"))?;
+    let mut projections = std::collections::BTreeMap::new();
+    for binding in store.bindings {
+        if !firecrab_helper_protocol::firecrab_tunnel::subdomain(&binding.subdomain)
+            || binding.connector_id.is_nil()
+        {
+            return Err("saved Firecrab address identity is invalid".into());
+        }
+        let value = serde_json::json!({"endpoint":store.endpoint,"protocol":store.protocol,
+            "subdomain":binding.subdomain,"target":binding.target,"connectorId":binding.connector_id,
+            "ownedConnector":binding.owned_connector,"credentialSha256":format!("{:x}",Sha256::digest(binding.token.as_bytes()))});
+        if projections.insert(binding.subdomain, value).is_some() {
+            return Err("saved Firecrab address identity is duplicated".into());
+        }
+    }
+    Ok(projections)
+}
 fn config() -> Result<Config> {
     Config::read(
         &ServiceEnv::from_process_env()
@@ -131,11 +166,15 @@ fn config() -> Result<Config> {
             .join("pipe/manifest.json"),
     )
 }
-fn apply(config: &Config) -> Result<()> {
+fn apply(config: &Config, permit: Option<Uuid>) -> Result<()> {
     let temp = tempfile::tempdir()?;
     let path = temp.path().join("pipe.json");
     fs::write(&path, serde_json::to_vec(config)?)?;
-    super::host::apply_quick_locked(&path)
+    if let Some(operation) = permit {
+        super::host::apply_address_locked(&path, operation)
+    } else {
+        super::host::apply_quick_locked(&path)
+    }
 }
 fn unit(enable: bool) -> Result<()> {
     let runner = RealCommandRunner;
@@ -208,7 +247,10 @@ pub(super) fn addresses() -> Result<Vec<Address>> {
 
 /// Prevent direct Quick Tunnel deletion from orphaning a stable public address.
 pub(super) fn require_unreferenced(id: Uuid) -> Result<()> {
-    if read()?.bindings.iter().any(|b| b.connector_id == id) {
+    let store = read()?;
+    if store.bindings.iter().any(|b| b.connector_id == id)
+        || store.pending.iter().any(|b| b.connector_id == id)
+    {
         return Err("Remove the Firecrab address before deleting its connector".into());
     }
     Ok(())
@@ -216,14 +258,42 @@ pub(super) fn require_unreferenced(id: Uuid) -> Result<()> {
 
 /// Keep managed connector targets under their stable address controller.
 pub(super) fn require_editable(id: Uuid) -> Result<()> {
-    if read()?
-        .bindings
-        .iter()
-        .any(|b| b.connector_id == id && b.owned_connector)
-    {
+    if connector_is_owned(id)? {
         return Err("Edit the Firecrab address to change its managed connector".into());
     }
     Ok(())
+}
+
+/// Pending parent intents protect children even after interruption before the final binding save.
+pub(super) fn connector_is_owned(id: Uuid) -> Result<bool> {
+    let store = read()?;
+    Ok(store
+        .bindings
+        .iter()
+        .any(|binding| binding.connector_id == id && binding.owned_connector)
+        || store
+            .pending
+            .iter()
+            .any(|pending| pending.connector_id == id))
+}
+
+/// Only an input-checked original parent permit can resume its uncertain publication.
+pub(super) fn ensure_pipe_idle_at(root: &Path, permit: Option<Uuid>) -> Result<()> {
+    read_at(&root.join("pipe/firecrab-addresses.json"))?.check_pipe_scope(permit)
+}
+
+/// A newly admitted ownership operation must wait for pending native publication.
+pub(super) fn pipe_has_pending() -> Result<bool> {
+    Ok(!read()?.pending.is_empty())
+}
+
+/// Persist uncertainty before any local file replacement or native service job.
+pub(super) fn mark_address_effects(root: &Path, operation: Uuid) -> Result<()> {
+    let path = root.join("pipe/firecrab-addresses.json");
+    let mut store = read_at(&path)?;
+    store.check_pipe_scope(Some(operation))?;
+    store.pending[0].effects_started = true;
+    write_at(&path, &store)
 }
 
 /// Full manifest applies must not silently remove an address's selected connector.
@@ -283,12 +353,53 @@ pub(super) fn manage_request(request: Request) -> Result<()> {
     let mut store = read()?;
     match request {
         Request::Connect { token, target } => {
-            let (subdomain, protocol) = resolve_token(&store.endpoint, &token.0)?;
+            if let Some(binding) = store
+                .bindings
+                .iter()
+                .find(|binding| binding.token == token.0)
+            {
+                let _pipe_lock = super::host::lock()?;
+                super::host_iac::check_address_control(
+                    &ServiceEnv::from_process_env().confdir,
+                    &binding.subdomain,
+                )?;
+            }
+            let previous_protocol = store.protocol;
+            let (subdomain, protocol) = match store.original_connect(&token.0, &target)? {
+                Some(original) => original,
+                None => resolve_token(&store.endpoint, &token.0)?,
+            };
             store.protocol = protocol;
-            save(&mut store, subdomain, target, Some(token.0))?;
+            save(
+                &mut store,
+                subdomain,
+                target,
+                Some(token.0),
+                previous_protocol,
+            )?;
         }
-        Request::Save { subdomain, target } => save(&mut store, subdomain, target, None)?,
+        Request::Save { subdomain, target } => {
+            let previous = store.protocol;
+            save(&mut store, subdomain, target, None, previous)?;
+        }
         Request::Delete { subdomain } => {
+            {
+                let _pipe_lock = super::host::lock()?;
+                super::host_iac::check_address_control(
+                    &ServiceEnv::from_process_env().confdir,
+                    &subdomain,
+                )?;
+            }
+            store.check_pipe_scope(None)?;
+            if store
+                .pending
+                .iter()
+                .any(|pending| pending.subdomain == subdomain)
+            {
+                return Err(
+                    "Recover the original address change before removing its connector".into(),
+                );
+            }
             let binding = store
                 .bindings
                 .iter()
@@ -318,7 +429,7 @@ pub(super) fn manage_request(request: Request) -> Result<()> {
             let _pipe_lock = super::host::lock()?;
             let mut config = config()?;
             release(&mut store, &mut config, &binding);
-            apply(&config)?;
+            apply(&config, None)?;
             store.bindings.retain(|b| b.subdomain != subdomain);
             write(&store)?;
             if store.bindings.is_empty() {
@@ -329,11 +440,34 @@ pub(super) fn manage_request(request: Request) -> Result<()> {
     Ok(())
 }
 /// Change one local target after resolving its dashboard-issued ownership token.
-fn save(store: &mut Store, subdomain: String, target: Target, token: Option<String>) -> Result<()> {
+fn save(
+    store: &mut Store,
+    subdomain: String,
+    target: Target,
+    token: Option<String>,
+    previous_protocol: RegistryProtocol,
+) -> Result<()> {
     let pipe_lock = super::host::lock()?;
-    if store.bindings.len() >= MAX_ADDRESSES
-        && !store.bindings.iter().any(|b| b.subdomain == subdomain)
-    {
+    super::host_iac::check_address_control(&ServiceEnv::from_process_env().confdir, &subdomain)?;
+    store.check_pipe_scope(
+        store
+            .pending
+            .iter()
+            .find(|pending| pending.subdomain == subdomain)
+            .map(|pending| pending.operation_id),
+    )?;
+    let occupied: std::collections::BTreeSet<_> = store
+        .bindings
+        .iter()
+        .map(|binding| binding.subdomain.as_str())
+        .chain(
+            store
+                .pending
+                .iter()
+                .map(|pending| pending.subdomain.as_str()),
+        )
+        .collect();
+    if occupied.len() >= MAX_ADDRESSES && !occupied.contains(subdomain.as_str()) {
         return Err("At most 16 Firecrab addresses can be saved on one host".into());
     }
     let mut config = config()?;
@@ -343,9 +477,23 @@ fn save(store: &mut Store, subdomain: String, target: Target, token: Option<Stri
         .find(|b| b.subdomain == subdomain)
         .cloned();
     let token = token
+        .or_else(|| {
+            store
+                .pending
+                .iter()
+                .find(|pending| pending.subdomain == subdomain)
+                .map(|pending| pending.token.clone())
+        })
         .or_else(|| old.as_ref().map(|binding| binding.token.clone()))
         .ok_or("Use a dashboard connection token to add a new Firecrab address")?;
     let managed_id = || {
+        if let Some(pending) = store
+            .pending
+            .iter()
+            .find(|pending| pending.subdomain == subdomain)
+        {
+            return pending.connector_id;
+        }
         old.as_ref()
             .filter(|b| {
                 b.owned_connector
@@ -399,10 +547,33 @@ fn save(store: &mut Store, subdomain: String, target: Target, token: Option<Stri
         release(store, &mut config, old);
     }
     config.validate()?;
-    if owned {
-        super::engines::install()?;
+    let permit = if owned {
+        let new_intent = store.pending.is_empty();
+        let operation = store.reserve_child(&subdomain, &target, &token, connector_id)?;
+        if new_intent {
+            store.pending[0].previous_protocol = previous_protocol;
+        }
+        // Persist the generated UUID and parent before install/apply can publish any child state.
+        write(store)?;
+        Some(operation)
+    } else {
+        None
+    };
+    let result = (|| {
+        if owned {
+            super::engines::install()?;
+        }
+        apply(&config, permit)
+    })();
+    if let Err(error) = result {
+        if let Some(operation) = permit {
+            *store = read()?;
+            if store.discard_unstarted(operation)? {
+                write(store)?;
+            }
+        }
+        return Err(error);
     }
-    apply(&config)?;
     let owned = owned
         || old
             .as_ref()
@@ -425,6 +596,9 @@ fn save(store: &mut Store, subdomain: String, target: Target, token: Option<Stri
     binding.connected = false;
     store.bindings.retain(|b| b.subdomain != subdomain);
     store.bindings.push(binding);
+    store
+        .pending
+        .retain(|pending| pending.subdomain != subdomain);
     // Persist ownership before the network request, including a lost response.
     write(store)?;
     drop(pipe_lock);
@@ -550,6 +724,13 @@ fn refresh_bindings(
 ) -> Result<()> {
     let client = client()?;
     for binding in &mut store.bindings {
+        if store
+            .pending
+            .iter()
+            .any(|pending| pending.subdomain == binding.subdomain)
+        {
+            continue;
+        }
         let connector = snapshot
             .quick_tunnels
             .iter()
@@ -809,6 +990,7 @@ mod tests {
             endpoint,
             protocol: RegistryProtocol::RegisterV1,
             bindings: vec![binding("first", id, true)],
+            pending: vec![],
         };
         refresh_bindings(&mut store, &snapshot).unwrap();
         assert!(!store.bindings[0].connected);
@@ -848,6 +1030,7 @@ mod tests {
             endpoint,
             protocol: RegistryProtocol::AddressesV1,
             bindings: vec![binding("first", id, true)],
+            pending: vec![],
         };
         refresh_bindings(&mut store, &snapshot).unwrap();
         assert!(!store.bindings[0].connected);
@@ -865,6 +1048,7 @@ mod tests {
             endpoint: ENDPOINT.into(),
             protocol: RegistryProtocol::default(),
             bindings: vec![original.clone(), binding("second", id, false)],
+            pending: vec![],
         };
         let mut config = config(id);
         release(&mut store, &mut config, &original);
@@ -882,6 +1066,7 @@ mod tests {
             endpoint: ENDPOINT.into(),
             protocol: RegistryProtocol::default(),
             bindings: vec![original.clone()],
+            pending: vec![],
         };
         let mut config = config(id);
         release(&mut store, &mut config, &original);
@@ -895,6 +1080,7 @@ mod tests {
             endpoint: ENDPOINT.into(),
             protocol: RegistryProtocol::default(),
             bindings: vec![binding("first", Uuid::new_v4(), false)],
+            pending: vec![],
         };
         write_at(&path, &store).unwrap();
         assert_eq!(

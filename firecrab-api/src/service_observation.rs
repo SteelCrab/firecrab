@@ -41,6 +41,69 @@ struct Session {
     since_ms: Option<i64>,
 }
 
+/// Allocate before configuration commit. Dropping unused preparation cancels its empty worker.
+pub(crate) struct PreparedPlan {
+    service: Uuid,
+    session: Option<Session>,
+}
+
+pub(crate) async fn prepare_plan(
+    state: &AppState,
+    input: crate::persistence::iac_resource_plans::OtlpInput,
+    request: Uuid,
+) -> Result<PreparedPlan, AppError> {
+    let service = input.service;
+    let session = if let Some(endpoint) = input.endpoint {
+        let store = state.store.clone();
+        let cursors = database(request, move || {
+            store.service_observation_highwater(service)
+        })
+        .await?;
+        let exporter = Exporter::new(&endpoint, service, &input.name)
+            .map_err(|_| AppError::internal(request))?;
+        Some(Session {
+            endpoint,
+            name: input.name,
+            exporter,
+            events: cursors.0,
+            logs: cursors.1,
+            since_ms: None,
+        })
+    } else {
+        None
+    };
+    Ok(PreparedPlan { service, session })
+}
+
+/// The receipt acknowledges saved configuration; delivery remains independently observable.
+pub(crate) async fn activate_plan(
+    state: &AppState,
+    receipt: &firecrab_stack::ResourcePlanReceipt,
+    mut prepared: PreparedPlan,
+    request: Uuid,
+) {
+    let store = state.store.clone();
+    let original = receipt.clone();
+    match database(request, move || {
+        store.resource_plan_otlp_activation(&original)
+    })
+    .await
+    {
+        Ok(Some(boundary)) => {
+            if let Some(mut session) = prepared.session.take() {
+                session.since_ms = boundary;
+                state.observations.install(prepared.service, session);
+            } else {
+                state.observations.remove(prepared.service);
+            }
+        }
+        Ok(None) => (),
+        Err(_) => {
+            tracing::warn!(operation_id=%receipt.plan.operation_id,"Saved OTLP configuration awaits exporter reconciliation")
+        }
+    }
+}
+
 /// Live exporter state. Observation history remains in SQLite.
 #[derive(Default)]
 pub(crate) struct Runtime {
@@ -289,6 +352,23 @@ pub(crate) async fn get(
     }))
 }
 
+/// Observe configuration without reading logs, events, alerts or deployment snapshots.
+pub(crate) async fn settings(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> Result<Json<crate::persistence::otlp_config::SettingsView>, AppError> {
+    operator(caller, request.0)?;
+    let service = parse_id(&id, request.0)?;
+    ensure_local_service(&state, service, request.0).await?;
+    let store = state.store.clone();
+    let view = database(request.0, move || store.otlp_settings(service))
+        .await?
+        .ok_or_else(|| AppError::not_found(request.0))?;
+    Ok(Json(view))
+}
+
 /// Configure the current operator endpoint, independently of release snapshots.
 pub(crate) async fn configure(
     State(state): State<AppState>,
@@ -313,6 +393,21 @@ pub(crate) async fn configure(
         })?;
     let claim = state.service_mutations.clone().lock_owned().await;
     ensure_local_service(&state, service, request.0).await?;
+    let store = state.store.clone();
+    let authority = crate::handlers::stacks::database(request.0, move || {
+        store.iac_resource_owner(&firecrab_stack::ManagedResource {
+            kind: "service_otlp".into(),
+            id: service.to_string(),
+        })
+    })
+    .await?;
+    if authority
+        .owner
+        .as_ref()
+        .is_some_and(|owner| owner.manager == firecrab_stack::Manager::Terraform)
+    {
+        return Err(crate::handlers::iac::managed(request.0));
+    }
     let store = state.store.clone();
     let (saved, active, current_endpoint) = database(request.0, move || {
         Ok((
@@ -361,8 +456,8 @@ pub(crate) async fn configure(
             .transpose()
             .map_err(|_| AppError::internal(request.0))?;
         let value = new_endpoint.clone();
-        let enabled_at_ms = database(request.0, move || {
-            store.set_otlp_endpoint(service, value.as_deref())
+        let enabled_at_ms = crate::handlers::stacks::database(request.0, move || {
+            store.set_otlp_endpoint_checked(service, value.as_deref(), &authority)
         })
         .await?;
         if let (Some(endpoint), Some(exporter)) = (&new_endpoint, exporter) {
@@ -464,9 +559,13 @@ fn export_pass_blocking(state: &AppState) -> Result<(), crate::persistence::Pers
                 )
             })
         };
-        if previous.is_none_or(|(same_endpoint, same_name, _, _)| !same_endpoint || !same_name) {
+        if previous.is_none_or(|(same_endpoint, same_name, _, since)| {
+            !same_endpoint || !same_name || since != Some(enabled_at_ms)
+        }) {
             let (cursors, since_ms) = match previous {
-                Some((true, _, cursors, since_ms)) => (cursors, since_ms),
+                Some((true, _, cursors, Some(since))) if since == enabled_at_ms => {
+                    (cursors, Some(since))
+                }
                 _ => (
                     state.store.service_observation_highwater(id)?,
                     Some(enabled_at_ms),
@@ -578,6 +677,10 @@ fn export_pass_blocking(state: &AppState) -> Result<(), crate::persistence::Pers
         .retain(|id| present.contains(id));
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "service_observation/iac_tests.rs"]
+mod iac_tests;
 
 #[cfg(test)]
 mod tests {

@@ -299,11 +299,12 @@ async fn database_services_real_engines() {
             }
         };
         assert!(denied, "read-only sessions must reject writes");
+        let trigger_id = Uuid::new_v4();
         let trigger = Trigger {
-            id: Uuid::new_v4(),
+            id: trigger_id,
             database_id: record.id,
             input: TriggerInput {
-                request_id: Uuid::new_v4(),
+                request_id: trigger_id,
                 schema: schema.clone(),
                 table: table.table.clone(),
                 service_id: Uuid::new_v4(),
@@ -355,8 +356,71 @@ async fn database_services_real_engines() {
         )
         .await
         .unwrap();
+        // Stale attempts must fail after acquiring their SQL-session lock, before grants.
+        assert!(
+            bindings::provision_checked(&record, &binding, || Err(Error::Invalid(
+                "superseded fixture attempt"
+            )))
+            .await
+            .is_err()
+        );
+        let key = format!("fc-binding:{}", binding.id);
+        match &mut c {
+            DatabaseConnection::Postgres(c) => assert!(
+                sqlx::query_scalar::<_, bool>(
+                    "SELECT pg_try_advisory_lock(hashtextextended($1,0))"
+                )
+                .bind(&key)
+                .fetch_one(c)
+                .await
+                .unwrap()
+            ),
+            DatabaseConnection::Mysql(c) => assert_eq!(
+                sqlx::query_scalar::<_, Option<i64>>("SELECT GET_LOCK(?,0)")
+                    .bind(&key)
+                    .fetch_one(c)
+                    .await
+                    .unwrap(),
+                Some(1)
+            ),
+        }
+        let checked = std::sync::atomic::AtomicBool::new(false);
+        assert!(
+            bindings::provision_checked(&record, &binding, || {
+                checked.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .is_err()
+        );
+        assert!(!checked.load(std::sync::atomic::Ordering::SeqCst));
+        match &mut c {
+            DatabaseConnection::Postgres(c) => assert!(
+                sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock(hashtextextended($1,0))")
+                    .bind(&key)
+                    .fetch_one(c)
+                    .await
+                    .unwrap()
+            ),
+            DatabaseConnection::Mysql(c) => assert_eq!(
+                sqlx::query_scalar::<_, Option<i64>>("SELECT RELEASE_LOCK(?)")
+                    .bind(&key)
+                    .fetch_one(c)
+                    .await
+                    .unwrap(),
+                Some(1)
+            ),
+        }
         bindings::provision(&record, &binding).await.unwrap();
         bindings::provision(&record, &binding).await.unwrap();
+        assert!(
+            bindings::revoke_checked(&record, &binding, || Err(Error::Invalid(
+                "superseded fixture attempt"
+            )))
+            .await
+            .is_err()
+        );
+        native_binding_api(&record).await;
         let private = binding.connection.settings(binding.id).unwrap();
         let mut restricted = DatabaseConnection::connect_write(&binding.connection, &private)
             .await
@@ -722,13 +786,17 @@ async fn api_call(
         )
         .await
         .unwrap();
-    assert_eq!(response.status().as_u16(), status, "{method} {path}");
-    serde_json::from_slice(
-        &to_bytes(response.into_body(), 2 * 1024 * 1024)
-            .await
-            .unwrap(),
-    )
-    .unwrap()
+    let actual = response.status().as_u16();
+    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        actual,
+        status,
+        "{method} {path}: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    serde_json::from_slice(&bytes).unwrap()
 }
 async fn api_job(app: &axum::Router, base: &str, id: &Value) -> Value {
     for _ in 0..300 {
@@ -922,6 +990,8 @@ async fn database_event_and_maintenance_api_real_engines() {
         );
         let path = format!("/api/pipe/database-triggers/{tid}");
         api_call(&app, "PUT", &path, json!({"paused":true}), 200).await;
+        // A completed creation retry returns its original receipt and must not
+        // overwrite the newer pause operation's current metadata.
         assert_eq!(
             api_call(
                 &app,
@@ -931,8 +1001,9 @@ async fn database_event_and_maintenance_api_real_engines() {
                 200
             )
             .await["paused"],
-            true
+            false
         );
+        assert!(state.store.database_trigger(tid).unwrap().unwrap().paused);
         let mut changed = trigger_input.clone();
         changed["path"] = json!("/different");
         api_call(&app, "POST", &format!("{base}/triggers"), changed, 409).await;
@@ -1044,24 +1115,54 @@ async fn database_event_and_maintenance_api_real_engines() {
                 .is_empty()
         );
 
-        // Failed setup retains ownership, is visible, cannot resume, and can be cleaned.
+        // A missing source is verified before broker/grant changes. Its known
+        // failure removes only local staging and retains the original receipt.
         let partial = Uuid::new_v4();
         let partial_path = format!("/api/pipe/database-triggers/{partial}");
-        api_call(&app,"POST",&format!("{base}/triggers"),json!({"requestId":partial,"schema":table.schema,"table":format!("missing_{}",partial.simple()),"serviceId":service_id}),404).await;
+        let missing_input = json!({"requestId":partial,"schema":table.schema,"table":format!("missing_{}",partial.simple()),"serviceId":service_id});
+        api_call(
+            &app,
+            "POST",
+            &format!("{base}/triggers"),
+            missing_input.clone(),
+            502,
+        )
+        .await;
+        api_call(
+            &app,
+            "POST",
+            &format!("{base}/triggers"),
+            missing_input,
+            502,
+        )
+        .await;
+        assert!(state.store.database_trigger(partial).unwrap().is_none());
         assert_eq!(
-            api_call(&app, "GET", &format!("{base}/triggers"), Value::Null, 200).await[0]["lastError"],
-            "setup_incomplete"
+            state
+                .store
+                .iac_native_operation(partial)
+                .unwrap()
+                .unwrap()
+                .state,
+            firecrab_stack::NativeOperationState::Failed
         );
-        api_call(&app, "PUT", &partial_path, json!({"paused":false}), 400).await;
+        assert!(
+            api_call(&app, "GET", &format!("{base}/triggers"), Value::Null, 200)
+                .await
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        api_call(&app, "PUT", &partial_path, json!({"paused":false}), 404).await;
         api_call(
             &app,
             "POST",
             &format!("{partial_path}/detach"),
             Value::Null,
-            200,
+            404,
         )
         .await;
-        api_call(&app, "DELETE", &partial_path, Value::Null, 200).await;
+        api_call(&app, "DELETE", &partial_path, Value::Null, 404).await;
 
         // Backups must finish before download/removal; retries reuse their receipt.
         let capabilities = api_call(
@@ -1247,4 +1348,111 @@ async fn database_event_and_maintenance_api_real_engines() {
         )
         .await;
     }
+}
+
+/// Run the durable native account API against each real disposable engine.
+async fn native_binding_api(record: &DatabaseRecord) {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    let directory = tempfile::tempdir().unwrap();
+    let state = crate::state::AppState::with_db_file(
+        crate::templates::TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .unwrap(),
+        directory.path().join("state.db"),
+    )
+    .await
+    .unwrap();
+    state
+        .store
+        .save_pipe_database(record.id, &record.input)
+        .unwrap();
+    let service = Uuid::new_v4();
+    state.store.insert_micro_service(&serde_json::from_value(json!({"id":service,"name":format!("native-{}",service.simple()),"image":"ghcr.io/qa/app:1","port":8080,"cpu":1,"ram":512})).unwrap()).unwrap();
+    let app = crate::server::build_router(
+        state.clone(),
+        &crate::server::HttpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            allowed_origins: vec![],
+            max_concurrent_requests: 16,
+            request_timeout: std::time::Duration::from_secs(15),
+            static_root: None,
+        },
+    );
+    let id = Uuid::new_v4();
+    let input =
+        json!({"requestId":id,"serviceId":service,"access":"read","envName":"DB_NATIVE_URL"});
+    let create = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/pipe/databases/{}/bindings", record.id))
+            .header("content-type", "application/json")
+            .body(Body::from(input.to_string()))
+            .unwrap()
+    };
+    let response = app.clone().oneshot(create()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["x-firecrab-operation-id"],
+        id.to_string()
+    );
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let summary: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(summary["ready"], true);
+    let binding = state.store.database_bindings().unwrap().pop().unwrap();
+    let settings = binding.connection.settings(id).unwrap();
+    DatabaseConnection::connect(&binding.connection, &settings)
+        .await
+        .unwrap()
+        .ping()
+        .await
+        .unwrap();
+    let retry = app.clone().oneshot(create()).await.unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(retry.into_body(), 65536)
+            .await
+            .unwrap(),
+        body
+    );
+    assert_eq!(
+        state.store.database_bindings().unwrap()[0].connection.uri,
+        binding.connection.uri
+    );
+    let operation = Uuid::new_v4();
+    let delete = || {
+        Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/pipe/database-bindings/{id}"))
+            .header("x-firecrab-operation-id", operation.to_string())
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        app.clone().oneshot(delete()).await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.oneshot(delete()).await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert!(state.store.database_bindings().unwrap().is_empty());
+    assert!(
+        DatabaseConnection::connect(&binding.connection, &settings)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        state
+            .store
+            .iac_native_operation(operation)
+            .unwrap()
+            .unwrap()
+            .state,
+        firecrab_stack::NativeOperationState::Succeeded
+    );
 }

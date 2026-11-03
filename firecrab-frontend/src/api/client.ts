@@ -386,15 +386,26 @@ export async function deleteKernel(version: string): Promise<void> {
 }
 
 /** Pair an installed image with an installed managed kernel. */
-export function updateImageKernel(
+export async function updateImageKernel(
   alias: string,
   request: UpdateImageKernelRequest,
 ): Promise<ImageResponse> {
-  return fetchJson(`/api/images/${encodeURIComponent(alias)}/kernel`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  });
+  const { nativeMutation } = await import("./nativeMutations");
+  const result = await nativeMutation<ImageResponse>(
+    "PUT",
+    `/api/images/${encodeURIComponent(alias)}/kernel`,
+    request,
+    "update_image_kernel",
+    "image",
+    getImage,
+    { id: alias, waitForCompletion: true },
+  );
+  if (!result.value)
+    throw new Error(
+      "The original image response is unavailable; review Stack operations.",
+    );
+  result.acknowledge();
+  return result.value;
 }
 
 /** Published M2Image packages and this host's matching cache/install state. */
@@ -435,17 +446,45 @@ export function getImagePackage(alias: string): Promise<ImageInstallResponse> {
 }
 
 /** Install a prepared local package (`POST /api/images/{alias}/install`). */
-export function startImageInstall(
+export async function startImageInstall(
   alias: string,
 ): Promise<ImageInstallResponse> {
-  return fetchJson(`/api/images/${encodeURIComponent(alias)}/install`, {
-    method: "POST",
-  });
+  const { nativeMutation } = await import("./nativeMutations");
+  const result = await nativeMutation<ImageInstallResponse>(
+    "POST",
+    `/api/images/${encodeURIComponent(alias)}/install`,
+    undefined,
+    "install_image",
+    "image",
+    getImageInstall,
+    alias,
+  );
+  if (!result.value)
+    throw new Error(
+      "The original image operation is unavailable; review Stack operations.",
+    );
+  if (["succeeded", "failed"].includes(result.value.status))
+    result.acknowledge();
+  return result.value;
 }
 
-/** Poll image installation status + log (`GET /api/images/{alias}/install`). */
-export function getImageInstall(alias: string): Promise<ImageInstallResponse> {
-  return fetchJson(`/api/images/${encodeURIComponent(alias)}/install`);
+export async function getImageInstall(
+  alias: string,
+): Promise<ImageInstallResponse> {
+  const value = await fetchJson<ImageInstallResponse>(
+    `/api/images/${encodeURIComponent(alias)}/install`,
+  );
+  if (["succeeded", "failed"].includes(value.status)) {
+    const { acknowledgeNativePoll } = await import("./nativeMutations");
+    await acknowledgeNativePoll(
+      "POST",
+      `/api/images/${encodeURIComponent(alias)}/install`,
+      "install_image",
+      "image",
+      alias,
+    );
+  }
+  return value;
 }
 
 /** Resolve whether an OCI reference can run on this host (`GET /api/oci/inspect`). */
@@ -456,34 +495,58 @@ export function inspectOciImage(
 }
 
 /** Start an async OCI import (`POST /api/oci/import`). Returns 202 + ImageInstallResponse. */
-export function startOciImport(
+export async function startOciImport(
   request: OciImportRequest,
 ): Promise<ImageInstallResponse> {
-  return fetchJson("/api/oci/import", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  });
+  const { nativeMutation } = await import("./nativeMutations");
+  const result = await nativeMutation<ImageInstallResponse>(
+    "POST",
+    "/api/oci/import",
+    request,
+    "import_image",
+    "image",
+    getOciImport,
+  );
+  if (!result.value)
+    throw new Error(
+      "The original image import is unavailable; review Stack operations.",
+    );
+  if (["succeeded", "failed"].includes(result.value.status))
+    result.acknowledge();
+  return result.value;
 }
 
-/** Poll an OCI import job (`GET /api/oci/import/{alias}`). */
-export function getOciImport(alias: string): Promise<ImageInstallResponse> {
-  return fetchJson(`/api/oci/import/${encodeURIComponent(alias)}`);
+export async function getOciImport(
+  alias: string,
+): Promise<ImageInstallResponse> {
+  const value = await fetchJson<ImageInstallResponse>(
+    `/api/oci/import/${encodeURIComponent(alias)}`,
+  );
+  if (["succeeded", "failed"].includes(value.status)) {
+    const { acknowledgeNativePoll } = await import("./nativeMutations");
+    await acknowledgeNativePoll(
+      "POST",
+      "/api/oci/import",
+      "import_image",
+      "image",
+      alias,
+    );
+  }
+  return value;
 }
 
-/** Unregister template and delete orphan artifact files (`DELETE /api/images/{alias}`). */
 export async function deleteImage(alias: string): Promise<void> {
-  let response: Response;
-  try {
-    response = await fetch(`/api/images/${encodeURIComponent(alias)}`, {
-      method: "DELETE",
-    });
-  } catch (error) {
-    throw ApiClientError.transport(transportDetail(error));
-  }
-  if (!response.ok) {
-    throw await fail(response);
-  }
+  const { nativeMutation } = await import("./nativeMutations");
+  const result = await nativeMutation<null>(
+    "DELETE",
+    `/api/images/${encodeURIComponent(alias)}`,
+    undefined,
+    "delete_image",
+    "image",
+    async () => null,
+    { id: alias, waitForCompletion: true },
+  );
+  result.acknowledge();
 }
 
 /** Delete a staged-but-not-installed package (`DELETE /api/images/{alias}/package`). */

@@ -26,6 +26,16 @@ async fn database<T: Send + 'static>(
         .await
         .map_err(|_| AppError::internal(request_id))?
         .map_err(|error| {
+            if matches!(
+                error,
+                PersistenceError::IacOwnershipConflict
+                    | PersistenceError::IacParentManaged
+                    | PersistenceError::IacResourceBusy
+                    | PersistenceError::StackApplyBusy
+                    | PersistenceError::StackSourceBusy
+            ) {
+                return crate::handlers::stacks::persistence_error(error, request_id);
+            }
             tracing::error!(%request_id, %error, "schedule database operation failed");
             AppError::internal(request_id)
         })

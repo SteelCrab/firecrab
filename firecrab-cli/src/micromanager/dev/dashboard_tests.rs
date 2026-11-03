@@ -2,6 +2,9 @@ use super::*;
 use socket2::{Domain, Socket, Type};
 use std::net::TcpListener;
 
+// A closed ephemeral port is otherwise reusable by another parallel fixture.
+static FIXTURE_PORTS: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+
 const VITE: &str = r#"
 import http from 'node:http';
 import {readFileSync} from 'node:fs';
@@ -32,6 +35,7 @@ struct Fixture {
     source: tempfile::TempDir,
     home: tempfile::TempDir,
     port: u16,
+    reserved_port: u16,
 }
 
 impl Fixture {
@@ -57,15 +61,22 @@ impl Fixture {
             dependency_revision(&frontend).unwrap(),
         )
         .unwrap();
-        let port = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let port = {
+            let mut ports = FIXTURE_PORTS.lock().unwrap();
+            loop {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let port = listener.local_addr().unwrap().port();
+                if !ports.contains(&port) {
+                    ports.push(port);
+                    break port;
+                }
+            }
+        };
         Self {
             source,
             home: tempfile::tempdir().unwrap(),
             port,
+            reserved_port: port,
         }
     }
 
@@ -76,7 +87,12 @@ impl Fixture {
         format!("http://127.0.0.1:{}", self.port)
     }
     fn start(&self) -> Result<(), Error> {
-        start(&self.source(), self.home.path(), self.port)
+        start(&self.source(), self.home.path(), self.port).inspect_err(|_| {
+            if let Ok(log) = fs::read_to_string(self.home.path().join("runtime/dev-dashboard.log"))
+            {
+                eprintln!("dashboard startup log:\n{log}");
+            }
+        })
     }
     fn start_private(&self, instance: &super::super::instance::Instance) -> Result<(), Error> {
         start(&self.source(), &instance.managed_home, self.port).inspect_err(|_| {
@@ -111,6 +127,10 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = stop(self.home.path());
+        FIXTURE_PORTS
+            .lock()
+            .unwrap()
+            .retain(|port| *port != self.reserved_port);
     }
 }
 
@@ -237,7 +257,14 @@ fn copied_sessions_cannot_control_primary_or_other_private_dashboards() {
             &first_bytes,
         ),
     ];
-    let client = client().unwrap();
+    // All three Node fixtures may share a loaded Windows runner. Keep the exact
+    // identity check, but allow the test verifier enough time to receive it.
+    let client = Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
     for (home, source, selected_port, original, foreign) in cases {
         let record = home.join("runtime/dev-dashboard.json");
         assert!(check_port(home, selected_port).is_ok());
@@ -249,7 +276,11 @@ fn copied_sessions_cannot_control_primary_or_other_private_dashboards() {
         assert!(port(home).is_err());
         assert_eq!(fs::read(&record).unwrap(), *foreign);
         for server in [&primary_server, &first_server, &second_server] {
-            assert!(running(&client, &server.0, &server.0.url()));
+            assert!(
+                running(&client, &server.0, &server.0.url()),
+                "original dashboard identity unavailable at {}",
+                server.0.url()
+            );
         }
         fs::write(record, original).unwrap();
     }
@@ -280,10 +311,17 @@ fn a_private_dashboard_rejects_a_different_source_before_stopping_its_server() {
 
 #[test]
 fn check_port_never_creates_state_and_preserves_foreign_listeners() {
-    let fixture = Fixture::new();
+    let mut fixture = Fixture::new();
+    // Keep the port reserved while changing from closed to listening.
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+    socket
+        .bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())
+        .unwrap();
+    fixture.port = socket.local_addr().unwrap().as_socket().unwrap().port();
     assert!(check_port(fixture.home.path(), fixture.port).is_ok());
     assert!(!fixture.home.path().join("runtime").exists());
-    let listener = TcpListener::bind(("127.0.0.1", fixture.port)).unwrap();
+    socket.listen(16).unwrap();
+    let listener: TcpListener = socket.into();
     assert!(check_port(fixture.home.path(), fixture.port).is_err());
     assert!(!fixture.home.path().join("runtime").exists());
     assert!(listener.local_addr().is_ok());
@@ -498,8 +536,10 @@ fn port_probe_distinguishes_listening_and_closed_ports() {
 
 #[test]
 fn occupied_ports_are_errors_and_the_other_listener_remains_open() {
-    let fixture = Fixture::new();
-    let listener = TcpListener::bind(("127.0.0.1", fixture.port)).unwrap();
+    let mut fixture = Fixture::new();
+    // Bind once and retain the listener; another parallel test cannot claim it.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    fixture.port = listener.local_addr().unwrap().port();
     assert!(
         fixture
             .start()

@@ -131,6 +131,8 @@ pub enum NetworkRequest {
     CheckPrivateDnsSupport,
     /// Fixed pipe controls; no arbitrary command or host paths.
     Pipe { request: crate::pipe::Operation },
+    /// Target-side ownership metadata; unsupported helpers must reject this operation.
+    HostIac { request: crate::host_iac::Request },
     /// Idempotently ensure the shared bridge/subnet/gateway exist.
     EnsureBridge,
     /// Idempotently ensure a MicroNetwork's own bridge/subnet/gateway exist
@@ -607,6 +609,9 @@ pub enum HelperFailure {
 /// Response to a [`NetworkRequestEnvelope`], echoing its correlation id.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkResponseEnvelope {
+    /// Optional target-side ownership receipt; absent in older helpers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_iac: Option<crate::host_iac::Reply>,
     /// Responder's [`crate::PROTOCOL_VERSION`].
     pub version: u16,
     /// Matches the request's `request_id`.
@@ -824,6 +829,7 @@ mod tests {
     #[test]
     fn response_result_round_trips() {
         let failure = NetworkResponseEnvelope {
+            host_iac: None,
             pipe: None,
             version: PROTOCOL_VERSION,
             request_id: Uuid::nil(),
@@ -886,6 +892,7 @@ mod tests {
             },
         ] {
             let envelope = NetworkResponseEnvelope {
+                host_iac: None,
                 pipe: None,
                 version: PROTOCOL_VERSION,
                 request_id: Uuid::nil(),

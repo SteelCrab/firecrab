@@ -36,6 +36,8 @@ pub enum Error {
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn purge(path: &Path) -> Result<(), Error> {
     validate_purge(path)?;
+    let _guard = super::native_unmanaged_guard(path)
+        .map_err(|error| io_error("check native ownership", path, io::Error::other(error)))?;
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -47,6 +49,8 @@ pub fn purge(path: &Path) -> Result<(), Error> {
 /// and verified downloads remain available to the new TOML installation.
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn clear_installation_state(home: &Path) -> Result<(), Error> {
+    let _guard = super::native_unmanaged_guard(home)
+        .map_err(|error| io_error("check native ownership", home, io::Error::other(error)))?;
     let provision = home.join("provision");
     reject_symlink_components(&provision)?;
     for relative in INSTALLATION_FILES {

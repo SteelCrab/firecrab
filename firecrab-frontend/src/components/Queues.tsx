@@ -10,7 +10,18 @@ import { useI18n } from "../i18n";
 import Screen from "./layout/Screen";
 
 type Network = { id: string; name: string };
-type Engine = { phase: string; error?: string | null; log?: string | null };
+type Engine = {
+  vmId?: string;
+  phase: string;
+  error?: string | null;
+  log?: string | null;
+};
+type EngineOperation = {
+  operationId: string;
+  state: string;
+  executionGeneration?: number;
+  ownership: { endpointId: string };
+};
 type Queue = {
   id: string;
   name: string;
@@ -27,18 +38,34 @@ type Metrics = {
   failed: number;
 };
 type Connection = { url: string };
-type Snapshot = { engine: Engine | null; queues: Queue[]; networks: Network[] };
+type Snapshot = {
+  engine: Engine | null;
+  queues: Queue[];
+  networks: Network[];
+  recovery?: EngineOperation;
+};
 
 async function mutate<T>(
   path: string,
   method: "POST" | "DELETE",
   body?: object,
+  recovery?: EngineOperation,
 ): Promise<T | null> {
   const response = await fetch(path, {
     method,
+    headers: {
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(recovery
+        ? {
+            "x-firecrab-endpoint-id": recovery.ownership.endpointId,
+            "x-firecrab-execution-generation": String(
+              recovery.executionGeneration ?? 0,
+            ),
+          }
+        : {}),
+    },
     ...(body
       ? {
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         }
       : {}),
@@ -95,7 +122,17 @@ export default function Queues() {
         revealId.current++;
         setSecret("");
       }
-      setSnapshot({ engine, queues, networks });
+      let recovery: EngineOperation | undefined;
+      if (engine?.vmId && engine.phase === "failed") {
+        const operations = await fetchJson<EngineOperation[]>(
+          `/api/iac/native-operations/resources/queue_engine/${encodeURIComponent(engine.vmId)}`,
+        );
+        recovery = operations.find(
+          (operation) => operation.state !== "succeeded",
+        );
+      }
+      if (!active.current || request !== requestId.current) return;
+      setSnapshot({ engine, queues, networks, recovery });
       setConnectionError("");
     } catch (cause) {
       if (active.current && request === requestId.current) {
@@ -168,12 +205,13 @@ export default function Queues() {
     path: string,
     method: "POST" | "DELETE",
     body?: object,
+    recovery?: EngineOperation,
   ) => {
     if (busy || connectionError) return false;
     setBusy(true);
     setError("");
     try {
-      await mutate(path, method, body);
+      await mutate(path, method, body, recovery);
       await refresh();
       return true;
     } catch (cause) {
@@ -347,12 +385,21 @@ export default function Queues() {
               {["failed", "stopped"].includes(snapshot.engine.phase) && (
                 <button
                   className="btn"
-                  disabled={!canAct}
+                  disabled={!canAct || snapshot.recovery?.state === "running"}
                   onClick={() =>
-                    void perform("/api/queue/engine/start", "POST")
+                    void perform(
+                      snapshot.recovery
+                        ? `/api/iac/native-operations/${encodeURIComponent(snapshot.recovery.operationId)}/recover`
+                        : "/api/queue/engine/start",
+                      "POST",
+                      undefined,
+                      snapshot.recovery,
+                    )
                   }
                 >
-                  {t("Start / recover", "시작 / 복구")}
+                  {snapshot.recovery
+                    ? t("Recover engine", "엔진 복구")
+                    : t("Start / recover", "시작 / 복구")}
                 </button>
               )}
               {snapshot.engine.phase === "running" && (

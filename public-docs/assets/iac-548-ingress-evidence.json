@@ -1,0 +1,87 @@
+{
+  "sourceCommit": "e0f4575943fcbee563d66e0ea460291192f6f5d2",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-03",
+  "fixture": true,
+  "scope": "Actual local Axum/SQLite/production React and the real root CLI broker inside an isolated Linux container. A test Unix-socket proxy forwards typed helper requests to that CLI and intentionally drops one committed acknowledgement. No live systemd/Nginx, KVM guest, Stack apply, Terraform provider or remote host runs. Terraform cards represent ownership metadata.",
+  "originalRequest": {
+    "expectedEndpointId": "73fd980f-7ca5-4cf3-9618-aeaed8406895",
+    "expectedGeneration": 1,
+    "expectedOwner": {
+      "id": "547faa0b-5d75-4b2b-a02e-4b66a80d7468",
+      "key": "firecrab_ingress.app",
+      "manager": "terraform"
+    },
+    "operationId": "0d878303-95d7-4b4d-9fd0-4df81be5e27a",
+    "owner": {
+      "id": "a3e7ca66-08c0-41eb-9a92-803c4a07a7c1",
+      "key": "firecrab_ingress.app",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "route:app.example.com/",
+      "kind": "ingress"
+    }
+  },
+  "recovered": {
+    "operationId": "0d878303-95d7-4b4d-9fd0-4df81be5e27a",
+    "ownership": {
+      "endpointId": "73fd980f-7ca5-4cf3-9618-aeaed8406895",
+      "resource": {
+        "kind": "ingress",
+        "id": "route:app.example.com/"
+      },
+      "generation": 2,
+      "owner": {
+        "manager": "terraform",
+        "id": "a3e7ca66-08c0-41eb-9a92-803c4a07a7c1",
+        "key": "firecrab_ingress.app"
+      }
+    }
+  },
+  "peerOwnership": {
+    "endpointId": "73fd980f-7ca5-4cf3-9618-aeaed8406895",
+    "generation": 1,
+    "owner": {
+      "id": "a3e7ca66-08c0-41eb-9a92-803c4a07a7c1",
+      "key": "firecrab_ingress.peer",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "route:peer.example.com/",
+      "kind": "ingress"
+    }
+  },
+  "manifestSha256Before": "fe44f26130597a6bcd3556c2c60fbf583a434ead4ef594abc214e95fd4221c49",
+  "manifestSha256After": "fe44f26130597a6bcd3556c2c60fbf583a434ead4ef594abc214e95fd4221c49",
+  "screenshots": {
+    "iac-548-ingress-desktop-2026-11-03.png": "709a22c3bb3e6671d662181ddceb808a7d1ab1c0636fa73620d5a6c56dd3d5b4",
+    "iac-548-ingress-mobile-2026-11-03.png": "68ee247e55ee19182fe74489c64247881819106274127f4f02ebdd4582b56f3e",
+    "iac-548-ingress-recovery-mobile-2026-11-03.png": "c036b646119f09bce0bef6a87d8e7def86fab1c52192f60bbda265e79fb900ec",
+    "iac-548-ingress-recovery-desktop-2026-11-03.png": "ad66129f6b60c074f7de6ca3a2b85d49e5bfe06682c0219e8bf78abffacfe8b6"
+  },
+  "runtimeArtifacts": {
+    "apiTestBinary": {
+      "file": "firecrab_api-8f41f84dab595347",
+      "sha256": "11a9d49ab277a5144057e743dc86351e9361fd94dd60ac1de6b4d3fa082e3b8d",
+      "implementationCommit": "f8e4cc5b29471816ac74e50dd5f9a36e76bd9e4d"
+    },
+    "linuxCli": {
+      "file": "firecrab",
+      "sha256": "af76c1eb4de4a0548a3087fac384129db4f97c1e151230b68f76c0ef681fc6ad",
+      "implementationCommit": "f8e4cc5b29471816ac74e50dd5f9a36e76bd9e4d"
+    },
+    "productionDashboard": {
+      "index.html": "ffb611c13ad5af1011b77d552528c48f3db0150fdb46659dc6cf9abcd1a9be3f",
+      "assets/index-DAzKZMqs.js": "efdf97b69ad8bacee17384213b835aa4f3901d05d952d98ba9e584b7ff368c01",
+      "assets/index-Dst_jZJv.css": "20a67c23f03c5af9e8e8edad64b203c7f8e1457e50e39c11d1bb6be0514dadfd"
+    },
+    "externalStylesheetReferences": [
+      "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+    ],
+    "apiHostPlatform": "Darwin/arm64",
+    "rustVersion": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "transportProxy": true,
+    "systemdObservations": "Explicit fixtures; no real systemd job executes."
+  }
+}

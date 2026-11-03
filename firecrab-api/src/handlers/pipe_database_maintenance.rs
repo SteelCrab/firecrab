@@ -134,7 +134,7 @@ fn save(
     state
         .store
         .save_database_job(&job)
-        .map_err(|_| AppError::internal(rid))?;
+        .map_err(|e| super::stacks::persistence_error(e, rid))?;
     Ok((StatusCode::ACCEPTED, Json(job.summary())))
 }
 /// Map setup errors to redacted HTTP errors.
@@ -168,6 +168,26 @@ pub async fn migrate(
     ValidatedJson(input): ValidatedJson<MigrationInput>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let _claim = state.service_mutations.lock().await;
+    let database_id = super::vms::parse_id(&id, rid.0)?;
+    // Original receipts do not depend on a connection that may have changed or been removed.
+    if let Some(previous) = state
+        .store
+        .database_job(input.request_id)
+        .map_err(|_| AppError::internal(rid.0))?
+    {
+        if previous.kind != Kind::Migration
+            || previous.database_id != database_id
+            || previous.version.as_ref() != Some(&input.version)
+            || previous.sql.as_ref() != Some(&input.sql)
+        {
+            return Err(AppError::conflict(
+                "request_conflict",
+                "The request ID belongs to another database operation",
+                rid.0,
+            ));
+        }
+        return Ok((StatusCode::OK, Json(previous.summary())));
+    }
     let record = load(state.clone(), rid.0, id).await?;
     let mut job =
         Job::new(&record, input.request_id, Kind::Migration).map_err(|e| validation(e, rid.0))?;
@@ -193,6 +213,10 @@ pub async fn migrate(
         &input.sql,
     )
     .map_err(|e| validation(e, rid.0))?;
+    state
+        .store
+        .database_migration_admission(&job)
+        .map_err(|e| super::stacks::persistence_error(e, rid.0))?;
     bounded_write(rid.0, maintenance::require_maintenance(&state, &record)).await?;
     save(&state, rid.0, job)
 }
@@ -239,6 +263,38 @@ pub async fn restore(
         ));
     }
     save(&state, rid.0, job)
+}
+/// Observe one immutable job without loading a mutable parent or replaying SQL.
+pub async fn get(
+    State(state): State<AppState>,
+    Extension(rid): Extension<RequestId>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let job = super::stacks::database(rid.0, move || state.store.database_job(id))
+        .await?
+        .ok_or_else(|| AppError::not_found(rid.0))?;
+    Ok(Json(job.summary()))
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Exact observed attempt to retry after a verified no-effect failure.
+pub struct RetryInput {
+    expected_generation: u64,
+}
+/// Uncertain migration effects require inspection/restore; this route cannot replay them.
+pub async fn retry(
+    State(state): State<AppState>,
+    Extension(rid): Extension<RequestId>,
+    Path(id): Path<Uuid>,
+    ValidatedJson(input): ValidatedJson<RetryInput>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let job = super::stacks::database(rid.0, move || {
+        state
+            .store
+            .retry_database_migration(id, input.expected_generation)
+    })
+    .await?;
+    Ok((StatusCode::ACCEPTED, Json(job.summary())))
 }
 /// Stream a completed private archive to the trusted operator.
 pub async fn download(

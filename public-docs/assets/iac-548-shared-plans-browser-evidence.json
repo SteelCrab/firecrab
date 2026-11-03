@@ -1,0 +1,625 @@
+{
+  "sourceCommit": "53125cb00865dc93dd7a327e5f7fa3f9030a286c",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-03",
+  "scope": "Actual local operator HTTP plan/apply/no-op requests, SQLite and production React for three configuration adapters under both manager identities. AI verification metadata is seeded; no live AI provider, guest boot, complete native YAML or Terraform provider execution. Other records of the existing browser fixture are outside this proof.",
+  "stackId": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+  "stackName": "shared-proof-d81277eb",
+  "terraformOwner": "57f52904-0a71-4d40-8969-72c775508a23",
+  "sourceConnection": "686e8b50-c680-4820-baf7-b872b36ed62d",
+  "resources": [
+    {
+      "manager": "stack",
+      "kind": "shell",
+      "create": {
+        "plan": {
+          "operationId": "964d3d32-d54b-459b-8c69-1bc839a72219",
+          "planSha256": "9554ac83b440e2e18af64dddaf2b7e0d6d9407e56e75c0f8db373a9c90188b16",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "shell",
+              "id": "e8b82988-2ffe-41c7-bd9f-dd877ce3f338"
+            },
+            "generation": 0,
+            "owner": null
+          },
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "startup"
+          },
+          "action": "create",
+          "changedFields": [],
+          "expiresAtMs": 1793706519118
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "shell",
+            "id": "e8b82988-2ffe-41c7-bd9f-dd877ce3f338"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "startup"
+          }
+        },
+        "revisionId": "e6c9518c-2ba3-42b9-b806-3b6167ae256a"
+      },
+      "noop": {
+        "plan": {
+          "operationId": "cd60d4cb-2c0f-43e0-acfb-263c031ba05c",
+          "planSha256": "307c474ca89c662d54b0c576c976062291340e3135d10308d875c63c5260c881",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "shell",
+              "id": "e8b82988-2ffe-41c7-bd9f-dd877ce3f338"
+            },
+            "generation": 1,
+            "owner": {
+              "manager": "stack",
+              "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+              "key": "startup"
+            }
+          },
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "startup"
+          },
+          "action": "noop",
+          "changedFields": [],
+          "expiresAtMs": 1793706519134
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "shell",
+            "id": "e8b82988-2ffe-41c7-bd9f-dd877ce3f338"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "startup"
+          }
+        },
+        "revisionId": "e6c9518c-2ba3-42b9-b806-3b6167ae256a"
+      },
+      "originalRetryUnchanged": true
+    },
+    {
+      "manager": "stack",
+      "kind": "ai_model",
+      "create": {
+        "plan": {
+          "operationId": "a6a4c4d9-4faf-4774-88b7-89111dc57907",
+          "planSha256": "65295273a70b1f52bf34754fd8b8f1b6896f66653bfeb517536d6890337c0cec",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "ai_model",
+              "id": "85007efc-f759-4a2c-9269-39fd84e40364"
+            },
+            "generation": 0,
+            "owner": null
+          },
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "default-model"
+          },
+          "action": "create",
+          "changedFields": [],
+          "expiresAtMs": 1793706519142,
+          "dependencies": [
+            {
+              "ownership": {
+                "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+                "resource": {
+                  "kind": "ai_connection",
+                  "id": "686e8b50-c680-4820-baf7-b872b36ed62d"
+                },
+                "generation": 0,
+                "owner": null
+              },
+              "configurationGeneration": 1
+            }
+          ]
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "ai_model",
+            "id": "85007efc-f759-4a2c-9269-39fd84e40364"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "default-model"
+          }
+        },
+        "revisionId": null
+      },
+      "noop": {
+        "plan": {
+          "operationId": "3a26267c-46fd-4e32-ae1d-58fbb1268a91",
+          "planSha256": "2cf939cab8e0dbd93d4b18b2d0b1100258152723027edd2449d4599e66a1d937",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "ai_model",
+              "id": "85007efc-f759-4a2c-9269-39fd84e40364"
+            },
+            "generation": 1,
+            "owner": {
+              "manager": "stack",
+              "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+              "key": "default-model"
+            }
+          },
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "default-model"
+          },
+          "action": "noop",
+          "changedFields": [],
+          "expiresAtMs": 1793706519152,
+          "dependencies": [
+            {
+              "ownership": {
+                "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+                "resource": {
+                  "kind": "ai_connection",
+                  "id": "686e8b50-c680-4820-baf7-b872b36ed62d"
+                },
+                "generation": 0,
+                "owner": null
+              },
+              "configurationGeneration": 1
+            }
+          ]
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "ai_model",
+            "id": "85007efc-f759-4a2c-9269-39fd84e40364"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "default-model"
+          }
+        },
+        "revisionId": null
+      },
+      "originalRetryUnchanged": true
+    },
+    {
+      "manager": "stack",
+      "kind": "sandbox_access",
+      "create": {
+        "plan": {
+          "operationId": "f6e23eef-ad81-44d2-b717-3426711a5234",
+          "planSha256": "847097e1e505b031e9280c7993589ded7986fbe76b25f6bdc17546a753cc45b4",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "sandbox_access",
+              "id": "2648b1e3-0243-4564-bb1b-0cca6461a226"
+            },
+            "generation": 0,
+            "owner": null
+          },
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "host-access"
+          },
+          "action": "create",
+          "changedFields": [],
+          "expiresAtMs": 1793706519159
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "sandbox_access",
+            "id": "2648b1e3-0243-4564-bb1b-0cca6461a226"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "host-access"
+          }
+        },
+        "revisionId": null
+      },
+      "noop": {
+        "plan": {
+          "operationId": "23558434-0167-45c4-a90f-1c221f5c7ef9",
+          "planSha256": "42e8b1364f65563194c54034a147189e5b79557809fbbda4eef641a3882b8bde",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "sandbox_access",
+              "id": "2648b1e3-0243-4564-bb1b-0cca6461a226"
+            },
+            "generation": 1,
+            "owner": {
+              "manager": "stack",
+              "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+              "key": "host-access"
+            }
+          },
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "host-access"
+          },
+          "action": "noop",
+          "changedFields": [],
+          "expiresAtMs": 1793706519167
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "sandbox_access",
+            "id": "2648b1e3-0243-4564-bb1b-0cca6461a226"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "stack",
+            "id": "a68ec251-2e85-4aeb-9e1a-76e29e69ae16",
+            "key": "host-access"
+          }
+        },
+        "revisionId": null
+      },
+      "originalRetryUnchanged": true
+    },
+    {
+      "manager": "terraform",
+      "kind": "shell",
+      "create": {
+        "plan": {
+          "operationId": "67b082e6-e7e8-4357-a0a5-de85f59eb388",
+          "planSha256": "fe020e5343eac1927ec8f1cd9cdb0dad4cc25fa13417c8362f2b8e333d0e87ff",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "shell",
+              "id": "d648d61f-5950-46cb-85e8-51d4ca3eec9b"
+            },
+            "generation": 0,
+            "owner": null
+          },
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_shell.review"
+          },
+          "action": "create",
+          "changedFields": [],
+          "expiresAtMs": 1793706519173
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "shell",
+            "id": "d648d61f-5950-46cb-85e8-51d4ca3eec9b"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_shell.review"
+          }
+        },
+        "revisionId": "90198733-78db-4216-b02d-74c1b9f26c32"
+      },
+      "noop": {
+        "plan": {
+          "operationId": "131b6eeb-94d1-4abd-bb9e-b9bc784aff1c",
+          "planSha256": "fc38bf31f73e01c6d5ba66cd6280b28f8d1b352038210da2aab6a12c26454016",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "shell",
+              "id": "d648d61f-5950-46cb-85e8-51d4ca3eec9b"
+            },
+            "generation": 1,
+            "owner": {
+              "manager": "terraform",
+              "id": "57f52904-0a71-4d40-8969-72c775508a23",
+              "key": "firecrab_shell.review"
+            }
+          },
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_shell.review"
+          },
+          "action": "noop",
+          "changedFields": [],
+          "expiresAtMs": 1793706519181
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "shell",
+            "id": "d648d61f-5950-46cb-85e8-51d4ca3eec9b"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_shell.review"
+          }
+        },
+        "revisionId": "90198733-78db-4216-b02d-74c1b9f26c32"
+      },
+      "originalRetryUnchanged": true
+    },
+    {
+      "manager": "terraform",
+      "kind": "ai_model",
+      "create": {
+        "plan": {
+          "operationId": "0265ef02-d758-4461-a537-72f12a2a1ebf",
+          "planSha256": "c27f45193474280bbfec357aabd5cc94390b07716969b284c826397b1d4fb4c3",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "ai_model",
+              "id": "17240990-504f-49bf-81ff-6291d278bb54"
+            },
+            "generation": 0,
+            "owner": null
+          },
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_ai_model.review"
+          },
+          "action": "create",
+          "changedFields": [],
+          "expiresAtMs": 1793706519186,
+          "dependencies": [
+            {
+              "ownership": {
+                "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+                "resource": {
+                  "kind": "ai_connection",
+                  "id": "686e8b50-c680-4820-baf7-b872b36ed62d"
+                },
+                "generation": 0,
+                "owner": null
+              },
+              "configurationGeneration": 1
+            }
+          ]
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "ai_model",
+            "id": "17240990-504f-49bf-81ff-6291d278bb54"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_ai_model.review"
+          }
+        },
+        "revisionId": null
+      },
+      "noop": {
+        "plan": {
+          "operationId": "12834a47-9c4c-4895-b12b-a210733e9083",
+          "planSha256": "a90a79da4fdcc141514745c4aa7681134764755ae63195c1378ee637aab64f59",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "ai_model",
+              "id": "17240990-504f-49bf-81ff-6291d278bb54"
+            },
+            "generation": 1,
+            "owner": {
+              "manager": "terraform",
+              "id": "57f52904-0a71-4d40-8969-72c775508a23",
+              "key": "firecrab_ai_model.review"
+            }
+          },
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_ai_model.review"
+          },
+          "action": "noop",
+          "changedFields": [],
+          "expiresAtMs": 1793706519194,
+          "dependencies": [
+            {
+              "ownership": {
+                "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+                "resource": {
+                  "kind": "ai_connection",
+                  "id": "686e8b50-c680-4820-baf7-b872b36ed62d"
+                },
+                "generation": 0,
+                "owner": null
+              },
+              "configurationGeneration": 1
+            }
+          ]
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "ai_model",
+            "id": "17240990-504f-49bf-81ff-6291d278bb54"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_ai_model.review"
+          }
+        },
+        "revisionId": null
+      },
+      "originalRetryUnchanged": true
+    },
+    {
+      "manager": "terraform",
+      "kind": "sandbox_access",
+      "create": {
+        "plan": {
+          "operationId": "ad031eaf-8903-4700-9962-ff11715fd3b4",
+          "planSha256": "0963247ded55e5bf017bb0148214e960222215edde3664ee3cfa23716fb9b1e0",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "sandbox_access",
+              "id": "2c014adc-ce67-41e1-b831-bdd87d0009d8"
+            },
+            "generation": 0,
+            "owner": null
+          },
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_sandbox_access.review"
+          },
+          "action": "create",
+          "changedFields": [],
+          "expiresAtMs": 1793706519200
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "sandbox_access",
+            "id": "2c014adc-ce67-41e1-b831-bdd87d0009d8"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_sandbox_access.review"
+          }
+        },
+        "revisionId": null
+      },
+      "noop": {
+        "plan": {
+          "operationId": "3101e9ae-5133-4ce5-98c0-dfa37bf789a4",
+          "planSha256": "3b4e120c13f3690151eed331ffc982c9ee329ddf69cb23057511842c46dd3e60",
+          "ownership": {
+            "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+            "resource": {
+              "kind": "sandbox_access",
+              "id": "2c014adc-ce67-41e1-b831-bdd87d0009d8"
+            },
+            "generation": 1,
+            "owner": {
+              "manager": "terraform",
+              "id": "57f52904-0a71-4d40-8969-72c775508a23",
+              "key": "firecrab_sandbox_access.review"
+            }
+          },
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_sandbox_access.review"
+          },
+          "action": "noop",
+          "changedFields": [],
+          "expiresAtMs": 1793706519208
+        },
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "sandbox_access",
+            "id": "2c014adc-ce67-41e1-b831-bdd87d0009d8"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_sandbox_access.review"
+          }
+        },
+        "revisionId": null
+      },
+      "originalRetryUnchanged": true
+    }
+  ],
+  "screenshots": {
+    "iac-548-shared-plans-native-2026-11-03.png": "2aadbadab3a3dd3fd8871002273951a90fd1fd36dca654492b80cf41ab882a9e",
+    "iac-548-shared-plans-terraform-2026-11-03.png": "a6d74cd05d743916f610531e6cf6d1fc2f21ee027342f5a0d2e71e6831834a76",
+    "iac-548-shared-plans-mobile-2026-11-03.png": "4272854b5ec91f9e81c91b2691dc561cb598cb0eb11558715cb8c5526aea5301",
+    "iac-548-shared-plans-retained-deny-2026-11-03.png": "7753959ecfdf426f7bbe9549f9d3ad7db4ec231676f7971ae44dd80a66d53887"
+  },
+  "removal": {
+    "receipt": {
+      "plan": {
+        "operationId": "000a2173-131b-4581-bada-912f875276db",
+        "planSha256": "f2c61281fc64458f4a657b32ccd297ec926be9c89c77a1619a44a21e773d0da4",
+        "ownership": {
+          "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+          "resource": {
+            "kind": "sandbox_access",
+            "id": "2c014adc-ce67-41e1-b831-bdd87d0009d8"
+          },
+          "generation": 1,
+          "owner": {
+            "manager": "terraform",
+            "id": "57f52904-0a71-4d40-8969-72c775508a23",
+            "key": "firecrab_sandbox_access.review"
+          }
+        },
+        "owner": {
+          "manager": "terraform",
+          "id": "57f52904-0a71-4d40-8969-72c775508a23",
+          "key": "firecrab_sandbox_access.review"
+        },
+        "action": "delete",
+        "changedFields": [],
+        "expiresAtMs": 1793706523308
+      },
+      "ownership": {
+        "endpointId": "342f4eb2-7114-4b4e-82b8-7e7b79e5df51",
+        "resource": {
+          "kind": "sandbox_access",
+          "id": "2c014adc-ce67-41e1-b831-bdd87d0009d8"
+        },
+        "generation": 2,
+        "owner": null
+      },
+      "revisionId": null
+    },
+    "originalAcknowledgementUnchanged": true,
+    "grantsAfterOriginalRetry": 0,
+    "retainedDenyRow": true
+  },
+  "bundle": [
+    {
+      "file": "index-CETzI9RL.js",
+      "sha256": "103fdb84a9be733bd79bf135c8dc28b3407c7f040ea115e8cad567e9ede2606f"
+    },
+    {
+      "file": "index-Dst_jZJv.css",
+      "sha256": "20a67c23f03c5af9e8e8edad64b203c7f8e1457e50e39c11d1bb6be0514dadfd"
+    }
+  ],
+  "borrowedConnectionGenerationUnchanged": 1
+}

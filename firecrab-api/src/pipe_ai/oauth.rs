@@ -221,6 +221,16 @@ impl LoginRegistry {
             .ok_or(Failure::Login)
     }
 
+    /// Interactive consent remains active until completion or expiry, even before callback delivery.
+    pub fn has_pending(&self, connection: Uuid) -> Result<bool, Failure> {
+        let attempts = self.0.lock().map_err(|_| Failure::Login)?;
+        Ok(attempts.values().any(|attempt| {
+            attempt.connection_id == connection
+                && attempt.expires > Instant::now()
+                && attempt.status.status == "pending"
+        }))
+    }
+
     /// Invalidate every outstanding attempt when its connection is replaced or removed.
     pub fn cancel_connection(&self, id: Uuid) {
         if let Ok(mut attempts) = self.0.lock() {

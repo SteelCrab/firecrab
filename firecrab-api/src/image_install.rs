@@ -457,7 +457,7 @@ fn normalize_base_url(raw: &str) -> Option<String> {
 }
 
 /// Download and verify a package, leaving it in the persistent local package
-/// cache for a later [`run_image_install`] call.
+/// cache for a later [`install_staged_package_once`] call.
 pub async fn run_package_install(
     tracker: ImageInstallTracker,
     templates: TemplateRegistry,
@@ -474,6 +474,7 @@ pub async fn run_package_install(
 
 /// Extract and register an image from a package prepared by
 /// [`run_package_install`].  This deliberately performs no network download.
+#[cfg(test)]
 pub async fn run_image_install(
     tracker: ImageInstallTracker,
     templates: TemplateRegistry,
@@ -611,11 +612,13 @@ async fn verify_package_members(
     Ok(())
 }
 
-async fn install_staged_package_once(
+pub(crate) async fn install_staged_package_once(
     tracker: &ImageInstallTracker,
     templates: &TemplateRegistry,
     spec: &TemplateSpec,
 ) -> Result<(), String> {
+    use sha2::Digest;
+    use std::os::unix::fs::OpenOptionsExt;
     let root = templates.image_root_path().to_path_buf();
     let archive = staged_package_path(&root, &spec.alias);
 
@@ -631,17 +634,68 @@ async fn install_staged_package_once(
     // prepared by an earlier API process and must not be trusted by path alone.
     verify_package_members(tracker, &archive, spec).await?;
 
-    tracker.append_log(&spec.alias, "extracting into image root");
-    extract_archive(&archive, &root).await?;
-    tracker.append_log(&spec.alias, "extracted");
-
-    tracker.append_log(&spec.alias, "verifying artifacts and registering");
+    tracker.append_log(&spec.alias, "extracting into private package staging");
+    let alias = spec.alias.clone();
     let templates = templates.clone();
     let spec = spec.clone();
-    tokio::task::spawn_blocking(move || templates.register_spec(spec))
-        .await
-        .map_err(|error| format!("register task panicked: {error}"))?
-        .map_err(|error| format!("register failed: {error}"))?;
+    tokio::task::spawn_blocking(move || {
+        let pinned = match templates.image_authority() {
+            Some(crate::image_lifecycle::ImageAuthority::Operation(work)) => {
+                work.check()
+                    .map_err(|_| "Original image operation is unavailable".to_owned())?;
+                match &work.intent().definition().source {
+                    crate::persistence::iac_images::ImageSource::Package {
+                        archive_sha256, ..
+                    } => Some(archive_sha256.clone()),
+                    _ => return Err("Original image source does not match".into()),
+                }
+            }
+            _ => None,
+        };
+        let staging = tempfile::Builder::new()
+            .prefix(".image-install-")
+            .tempdir_in(&root)
+            .map_err(|error| format!("create package staging: {error}"))?;
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&archive)
+            .map_err(|_| "Cannot open original image package".to_owned())?;
+        if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+            return Err("Original image package is not a regular file".into());
+        }
+        if let Some(expected) = pinned {
+            use std::io::{Read, Seek};
+            let mut hash = sha2::Sha256::new();
+            let mut buffer = [0; 65536];
+            loop {
+                let count = file
+                    .read(&mut buffer)
+                    .map_err(|_| "Cannot verify original image package".to_owned())?;
+                if count == 0 {
+                    break;
+                }
+                hash.update(&buffer[..count]);
+            }
+            if format!("{:x}", hash.finalize()) != expected {
+                return Err("Original image package changed".into());
+            }
+            file.rewind()
+                .map_err(|_| "Cannot rewind original image package".to_owned())?;
+        }
+        extract_archive_file(file, staging.path())?;
+        templates
+            .physical_root()
+            .map_err(|_| "Original image root changed".to_owned())?;
+        let spec = publish_package_artifacts(&root, staging.path(), spec)?;
+        templates
+            .register_spec(spec)
+            .map_err(|error| format!("register failed: {error}"))?;
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|error| format!("register task panicked: {error}"))??;
+    tracker.append_log(&alias, "verified artifacts registered");
     Ok(())
 }
 
@@ -786,66 +840,127 @@ fn list_archive_members_piped_blocking(archive: &Path) -> Result<std::process::O
     Ok(tar)
 }
 
+/// Publish only declared regular artifacts, under immutable content identities.
+/// Archive paths never select a destination in the shared kernel/image namespaces.
+fn publish_package_artifacts(
+    root: &Path,
+    staging: &Path,
+    mut spec: TemplateSpec,
+) -> Result<TemplateSpec, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut publish = |relative: &Path| -> Result<PathBuf, String> {
+        let source = staging.join(relative);
+        let mut input = std::fs::File::open(&source)
+            .map_err(|error| format!("open staged artifact: {error}"))?;
+        if !input.metadata().is_ok_and(|m| m.is_file()) {
+            return Err("package artifact is not a regular file".into());
+        }
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = input
+                .read(&mut buffer)
+                .map_err(|error| format!("hash staged artifact: {error}"))?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+        }
+        // Keep the package's filename for format/version observation, but never overwrite it.
+        let directory = Path::new(".image-artifacts").join(format!("{:x}", hasher.finalize()));
+        let destination = directory.join(relative.file_name().ok_or("invalid package artifact")?);
+        for folder in [root.join(".image-artifacts"), root.join(&directory)] {
+            match std::fs::create_dir(&folder) {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if !std::fs::symlink_metadata(&folder).is_ok_and(|m| m.is_dir()) {
+                        return Err("package artifact namespace is not a directory".into());
+                    }
+                }
+                Err(error) => return Err(format!("create artifact namespace: {error}")),
+            }
+        }
+        // A new hard link is atomic and cannot replace an existing kernel, VM pin or alias.
+        match std::fs::hard_link(&source, root.join(&destination)) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut existing = std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open(root.join(&destination))
+                    .map_err(|error| format!("inspect existing artifact: {error}"))?;
+                if !existing.metadata().is_ok_and(|m| m.is_file()) {
+                    return Err("existing package artifact is not a regular file".into());
+                }
+                let mut hash = Sha256::new();
+                loop {
+                    let count = existing
+                        .read(&mut buffer)
+                        .map_err(|error| format!("hash existing artifact: {error}"))?;
+                    if count == 0 {
+                        break;
+                    }
+                    hash.update(&buffer[..count]);
+                }
+                if directory.file_name().and_then(|name| name.to_str())
+                    != Some(format!("{:x}", hash.finalize()).as_str())
+                {
+                    return Err("existing package artifact digest changed".into());
+                }
+            }
+            Err(error) => return Err(format!("publish package artifact: {error}")),
+        }
+        Ok(destination)
+    };
+    spec.kernel = publish(&spec.kernel)?;
+    spec.rootfs = publish(&spec.rootfs)?;
+    spec.initrd = spec.initrd.as_deref().map(&mut publish).transpose()?;
+    Ok(spec)
+}
+
+#[cfg(test)]
 async fn extract_archive(archive: &Path, dest: &Path) -> Result<(), String> {
-    let archive = archive.to_path_buf();
-    let dest = dest.to_path_buf();
+    let archive = archive.to_owned();
+    let dest = dest.to_owned();
     tokio::task::spawn_blocking(move || extract_archive_blocking(&archive, &dest))
         .await
         .map_err(|error| format!("extract task panicked: {error}"))?
 }
 
+#[cfg(test)]
 fn extract_archive_blocking(archive: &Path, dest: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dest).map_err(|error| format!("mkdir {}: {error}", dest.display()))?;
-
-    let status = Command::new("tar")
-        .args(["--use-compress-program=zstd", "-xf"])
-        .arg(archive)
-        .arg("-C")
-        .arg(dest)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .status();
-
-    match status {
-        Ok(code) if code.success() => Ok(()),
-        Ok(code) => extract_archive_piped_blocking(archive, dest).map_err(|piped| {
-            format!("tar extract failed ({code}); pipe fallback also failed: {piped}")
-        }),
-        Err(error) => extract_archive_piped_blocking(archive, dest)
-            .map_err(|piped| format!("tar spawn failed ({error}); pipe fallback: {piped}")),
-    }
+    let file = std::fs::File::open(archive).map_err(|error| format!("open archive: {error}"))?;
+    extract_archive_file(file, dest)
 }
 
-fn extract_archive_piped_blocking(archive: &Path, dest: &Path) -> Result<(), String> {
-    let mut zstd = Command::new("zstd")
-        .args(["-dc", "--"])
-        .arg(archive)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("spawn zstd: {error}"))?;
-
-    let stdout = zstd
-        .stdout
-        .take()
-        .ok_or_else(|| "zstd stdout missing".to_owned())?;
-
-    let tar = Command::new("tar")
-        .args(["-x", "-C"])
-        .arg(dest)
-        .stdin(stdout)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| format!("tar -x: {error}"))?;
-
-    let zstd_status = zstd.wait().map_err(|error| format!("zstd wait: {error}"))?;
-    if !zstd_status.success() {
-        return Err(format!("zstd decompress failed ({zstd_status})"));
-    }
-    if !tar.status.success() {
-        let err = String::from_utf8_lossy(&tar.stderr);
-        return Err(format!("tar -x failed ({}): {}", tar.status, err.trim()));
+fn extract_archive_file(file: std::fs::File, dest: &Path) -> Result<(), String> {
+    let decoder = zstd::Decoder::new(file).map_err(|error| format!("decode archive: {error}"))?;
+    let mut archive = tar::Archive::new(decoder);
+    std::fs::create_dir_all(dest)
+        .map_err(|error| format!("create extraction directory: {error}"))?;
+    for entry in archive
+        .entries()
+        .map_err(|error| format!("read archive: {error}"))?
+    {
+        let mut entry = entry.map_err(|error| format!("read archive member: {error}"))?;
+        let relative = entry
+            .path()
+            .map_err(|error| format!("read member path: {error}"))?;
+        if !is_safe_archive_member(&relative.to_string_lossy()) {
+            return Err("package member is outside kernel/ or rootfs/".into());
+        }
+        let kind = entry.header().entry_type();
+        if !kind.is_file() && !kind.is_gnu_sparse() && !kind.is_dir() {
+            return Err("package members must be regular files or directories".into());
+        }
+        if !entry
+            .unpack_in(dest)
+            .map_err(|error| format!("extract package member: {error}"))?
+        {
+            return Err("package member escaped staging".into());
+        }
     }
     Ok(())
 }
@@ -1218,8 +1333,117 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn package_install_cannot_replace_shared_kernels_or_other_alias_artifacts() {
+        let source = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        let spec = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
+        for relative in [&spec.kernel, &spec.rootfs]
+            .into_iter()
+            .chain(spec.initrd.as_ref())
+        {
+            write_file(&source.path().join(relative), b"new-package-artifact");
+            write_file(&dest.path().join(relative), b"retained-artifact");
+        }
+        let victim = dest.path().join(".oci/kernel/retained");
+        write_file(&victim, b"retained-managed-kernel");
+        write_file(
+            &source.path().join("kernel/unrequested"),
+            b"must-not-publish",
+        );
+        let archive = staged_package_path(dest.path(), &spec.alias);
+        make_tar_zst(source.path(), &["kernel", "rootfs"], &archive);
+        let templates = TemplateRegistry::from_specs(dest.path(), std::iter::empty()).unwrap();
+        let tracker = ImageInstallTracker::disabled();
+        install_staged_package_once(&tracker, &templates, &spec)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"retained-managed-kernel");
+        for relative in [&spec.kernel, &spec.rootfs]
+            .into_iter()
+            .chain(spec.initrd.as_ref())
+        {
+            assert_eq!(
+                fs::read(dest.path().join(relative)).unwrap(),
+                b"retained-artifact"
+            );
+        }
+        assert!(!dest.path().join("kernel/unrequested").exists());
+        let template = templates.resolve_alias(&spec.alias).unwrap();
+        assert_eq!(
+            fs::read(dest.path().join(template.kernel.relative_path())).unwrap(),
+            b"new-package-artifact"
+        );
+        // Reinstall reuses the same verified immutable artifact instead of replacing its inode.
+        use std::os::unix::fs::MetadataExt;
+        let path = dest.path().join(template.kernel.relative_path());
+        let inode = fs::metadata(&path).unwrap().ino();
+        install_staged_package_once(&tracker, &templates, &spec)
+            .await
+            .unwrap();
+        assert_eq!(fs::metadata(path).unwrap().ino(), inode);
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
-    fn piped_tar_fallback_lists_and_extracts_a_valid_archive() {
+    fn sparse_package_artifacts_keep_their_logical_bytes_without_allowing_links() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+        let source = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        let path = source.path().join("sparse.ext4");
+        let mut file = fs::File::create(&path).unwrap();
+        let length = 2 * 1024 * 1024;
+        file.set_len(length).unwrap();
+        file.write_all(b"first").unwrap();
+        file.seek(SeekFrom::Start(length - 4)).unwrap();
+        file.write_all(b"last").unwrap();
+        file.sync_all().unwrap();
+        let archive = source.path().join("sparse.tar.zst");
+        let encoder = zstd::Encoder::new(fs::File::create(&archive).unwrap(), 1).unwrap();
+        let mut builder = tar::Builder::new(encoder);
+        builder
+            .append_path_with_name(&path, "rootfs/sparse.ext4")
+            .unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+        let decoder = zstd::Decoder::new(fs::File::open(&archive).unwrap()).unwrap();
+        let mut inspected = tar::Archive::new(decoder);
+        assert!(
+            inspected
+                .entries()
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .header()
+                .entry_type()
+                .is_gnu_sparse()
+        );
+        extract_archive_blocking(&archive, dest.path()).unwrap();
+        let mut restored = fs::File::open(dest.path().join("rootfs/sparse.ext4")).unwrap();
+        assert_eq!(restored.metadata().unwrap().len(), length);
+        let mut bytes = vec![];
+        restored.read_to_end(&mut bytes).unwrap();
+        assert_eq!(&bytes[..5], b"first");
+        assert!(bytes[5..bytes.len() - 4].iter().all(|byte| *byte == 0));
+        assert_eq!(&bytes[bytes.len() - 4..], b"last");
+    }
+
+    #[tokio::test]
+    async fn package_links_cannot_escape_private_staging() {
+        let source = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), source.path().join("kernel")).unwrap();
+        let archive = source.path().join("links.tar.zst");
+        make_tar_zst(source.path(), &["kernel"], &archive);
+        let error = extract_archive(&archive, dest.path()).await.unwrap_err();
+        assert!(error.contains("regular files"), "{error}");
+        assert!(!dest.path().join("kernel").exists());
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn piped_tar_listing_and_safe_extraction_read_a_valid_archive() {
         let source = tempdir().unwrap();
         let dest = tempdir().unwrap();
         write_file(&source.path().join("kernel/vmlinux"), b"kernel-bytes");
@@ -1235,7 +1459,7 @@ mod tests {
         assert!(listed.status.success());
         assert!(String::from_utf8_lossy(&listed.stdout).contains("kernel/vmlinux"));
 
-        extract_archive_piped_blocking(&archive, dest.path()).unwrap();
+        extract_archive_blocking(&archive, dest.path()).unwrap();
         assert_eq!(
             fs::read(dest.path().join("rootfs/root.ext4")).unwrap(),
             b"rootfs-bytes"

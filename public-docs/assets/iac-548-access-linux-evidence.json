@@ -1,0 +1,50 @@
+{
+  "sourceCommit": "53125cb00865dc93dd7a327e5f7fa3f9030a286c",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-03",
+  "platform": "linux/arm64",
+  "rustVersion": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "profile": "release",
+  "buildEnvironment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "results": {
+    "tlsStartup": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "vmShim": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    "api": {
+      "passed": 1926,
+      "failed": 0,
+      "ignored": 27
+    }
+  },
+  "artifacts": [
+    {
+      "file": "firecrab_api-ddca5945616d069a",
+      "sha256": "ea8394bec1e2774c082b867e53ffebbd91847c1a4b7ac3f98d485929433530b3"
+    },
+    {
+      "file": "vm_shim_subcommand-df07976ac27f236c",
+      "sha256": "cc45168018fdbd51b3f11781dda4cdfe51eaf75eefb24439b56ab4ac2e8a2b88"
+    },
+    {
+      "file": "tls_startup-3f0f7ebf2f315d5f",
+      "sha256": "c45db94b430ed61e71cc923bc22a5727242a7c6e42392e5514107c1be06a5121"
+    }
+  ],
+  "logs": {
+    "buildSha256": "582500d6df3e348bb49f0ba5f393db7866592bba52071d765fe710716d2bf28f",
+    "testSha256": "b30124450c5464f7145006874e930c56b86e5bbbf97bb574db7a8c3c08749b7d",
+    "clippySha256": "b9ab7b9828b1619699853c1cf1238e06debfdf83ad6e87b3c53f560b0d5172a5"
+  },
+  "scope": "Full Linux Release API/TLS/VM-shim suite and strict Clippy for shared Shell, AI-model and Sandbox access-policy configuration. Includes original Stack Secret/child inputs, exact source-directory proofs, explicit revocation-generation acknowledgement, retained deny rows, immutable completion and borrowed-resource preservation. Includes all existing Sandbox permission tests; local HTTP/provider/guest fixtures are not live every-row acceptance. No complete all-service YAML or Terraform provider execution claimed."
+}

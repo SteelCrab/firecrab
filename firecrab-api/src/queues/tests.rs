@@ -332,7 +332,7 @@ async fn ordinary_vm_mutations_cannot_delete_or_stop_the_queue_engine() {
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(json["error"]["code"], "queue_owned");
+        assert_eq!(json["error"]["code"], "iac_parent_managed");
     }
     assert!(state.store.load_all().unwrap().contains_key(&engine.vm_id));
 }
@@ -379,7 +379,15 @@ async fn retry_checkpoints_existing_vm_before_boot_and_never_replaces_it_if_miss
     state.store.save_queue_engine(&engine).unwrap();
 
     // The fixture has no bootable template. Ownership must survive this boot failure.
-    start_engine(state.clone(), Uuid::new_v4()).await.unwrap();
+    operate_engine(
+        state.clone(),
+        firecrab_stack::NativeAction::StartQueueEngine,
+        None,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .unwrap();
     let saved = wait_for_engine_failure(&state).await;
     assert!(saved.vm_created);
     assert_eq!(saved.vm_id, engine.vm_id);
@@ -387,14 +395,29 @@ async fn retry_checkpoints_existing_vm_before_boot_and_never_replaces_it_if_miss
 
     state.vms.lock().unwrap().remove(&engine.vm_id);
     state.store.delete(engine.vm_id).unwrap();
-    start_engine(state.clone(), Uuid::new_v4()).await.unwrap();
-    let saved = wait_for_engine_failure(&state).await;
-    assert!(
-        saved
-            .error
-            .unwrap()
-            .contains("restore its records and disk")
+    let resource = firecrab_stack::ManagedResource {
+        kind: "queue_engine".into(),
+        id: engine.vm_id.to_string(),
+    };
+    let original = state
+        .store
+        .iac_native_operations(&resource)
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        original.state,
+        firecrab_stack::NativeOperationState::NeedsRecovery
     );
+    recover_operation(
+        state.clone(),
+        Uuid::new_v4(),
+        original.operation_id,
+        original.execution_generation,
+    )
+    .await
+    .unwrap();
+    let saved = wait_for_engine_failure(&state).await;
+    assert!(saved.error.unwrap().contains("retained VM and disk"));
     assert!(state.vms.lock().unwrap().is_empty());
     assert!(state.templates.resolve_alias(TEMPLATE).is_none());
 }
@@ -411,9 +434,29 @@ async fn missing_stateful_disk_is_never_rebuilt_from_the_template() {
         vm.clone()
     };
     state.store.update(&vm).unwrap();
-    start_engine(state.clone(), Uuid::new_v4()).await.unwrap();
+    operate_engine(
+        state.clone(),
+        firecrab_stack::NativeAction::StartQueueEngine,
+        None,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .unwrap();
     let saved = wait_for_engine_failure(&state).await;
-    assert!(saved.error.unwrap().contains("Queue disk is missing"));
+    assert!(saved.error.unwrap().contains("retained VM and disk"));
+    let operations = state
+        .store
+        .iac_native_operations(&firecrab_stack::ManagedResource {
+            kind: "queue_engine".into(),
+            id: engine.vm_id.to_string(),
+        })
+        .unwrap();
+    assert_eq!(operations.len(), 1);
+    assert_eq!(
+        operations[0].state,
+        firecrab_stack::NativeOperationState::NeedsRecovery
+    );
     assert_eq!(saved.vm_id, engine.vm_id);
     assert_eq!(saved.password, engine.password);
     assert_eq!(

@@ -38,12 +38,23 @@ class App:
         self.name = name
         self.started = threading.Event()
         self.release = threading.Event()
+        self.requests = []
         app = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                self.do_GET()
+
             def do_GET(self):
+                app.requests.append((self.command, self.path))
+                if self.path == "/late-exit" and app.name == "faulty":
+                    app.started.set()
+                    assert app.release.wait(20), "fault injection was not released"
+                    self.close_connection = True
+                    return
                 if self.path == "/ws":
                     key = self.headers["Sec-WebSocket-Key"]
                     accept = base64.b64encode(hashlib.sha1(
@@ -98,9 +109,9 @@ class App:
         self.thread.join()
 
 
-def request(port, host="deploy.example.com", path="/"):
+def request(port, host="deploy.example.com", path="/", method="GET"):
     with contextlib.closing(http.client.HTTPConnection("127.0.0.1", port, timeout=10)) as conn:
-        conn.request("GET", path, headers={"Host": host})
+        conn.request(method, path, headers={"Host": host})
         response = conn.getresponse()
         return response.status, response.read().decode()
 
@@ -131,8 +142,8 @@ def echo(stream, text):
 def run(firecrab, nginx):
     with contextlib.ExitStack() as stack:
         directory = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="fc-deploy-", dir="/tmp")))
-        old, new, other = [App(name) for name in ["old", "new", "other"]]
-        for app in [old, new, other]:
+        old, new, other, faulty = [App(name) for name in ["old", "new", "other", "faulty"]]
+        for app in [old, new, other, faulty]:
             stack.callback(app.close)
         with socket.socket() as reserved:
             reserved.bind(("127.0.0.1", 0))
@@ -252,6 +263,35 @@ def run(firecrab, nginx):
         assert not errors, errors
         print(f"PASS Deploy rolling switch and rollback: {len(samples)} continuous requests, zero errors")
         print("PASS held HTTP and WebSocket survive reloads; unrelated route and invalid-config recovery remain intact")
+        # A VM can exit after a valid request has already waited for its response.
+        # Each fresh route starts with the faulty peer, then the healthy peer.
+        for method in ["GET", "POST"]:
+            host = method.lower() + ".failover.example.test"
+            faulty.started.clear()
+            faulty.release.clear()
+            manifest["routes"].append({"host": host, "upstreams": [faulty.address, new.address]})
+            generation = render([old.address])
+            assert check().returncode == 0
+            process.send_signal(signal.SIGHUP)
+            wait_generation(generation)
+            before = new.requests.count((method, "/late-exit"))
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                pending = executor.submit(request, port, host, "/late-exit", method)
+                try:
+                    assert faulty.started.wait(5), "request did not reach the faulty peer"
+                    time.sleep(4)  # Exceed the previous three-second retry cutoff.
+                finally:
+                    faulty.release.set()
+                result = pending.result(timeout=5)
+            if method == "GET":
+                assert result == (200, "new:/late-exit"), ("late GET did not fail over", result)
+                assert new.requests.count((method, "/late-exit")) == before + 1
+            else:
+                assert result[0] == 502, ("a sent mutation must not be replayed", result)
+                assert new.requests.count((method, "/late-exit")) == before
+            assert request(port, "other.example.com") == (200, "other:/")
+        print("PASS late upstream exit retries GET on a healthy peer and never replays POST")
+
 
 
 if __name__ == "__main__":

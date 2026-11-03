@@ -20,6 +20,7 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
     evidence["replicaRecovery"] = metrics
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     loaders = []
+    failure_capture = threading.Lock()
     started = time.monotonic()
 
     def path(service, suffix=""):
@@ -62,10 +63,31 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
                         "stage": metrics.get("currentStage"), "elapsedSeconds": round(time.monotonic() - started, 2),
                         "startedSeconds": request_started,
                         "error": str(error)})
-                    if "ingressAtFailure" not in metrics:
-                        result = subprocess.run(["journalctl", "-u", "firecrab-ingress.service", "--no-pager", "-n", "40", "-o", "cat"],
-                                                capture_output=True, text=True, timeout=3)
-                        metrics["ingressAtFailure"] = result.stdout
+                    with failure_capture:
+                        if "ingressAtFailure" not in metrics:
+                            result = subprocess.run(["journalctl", "-u", "firecrab-ingress.service", "--no-pager", "-n", "100", "-o", "cat"],
+                                                    capture_output=True, text=True, timeout=3)
+                            metrics["ingressAtFailure"] = result.stdout
+                            snapshot = {"elapsedSeconds": round(time.monotonic() - started, 2), "services": []}
+                            try:
+                                for saved in services:
+                                    record = current(saved)
+                                    replicas = []
+                                    for instance in record["instances"]:
+                                        vm = api.call("GET", "/api/vms/" + instance["vmId"])
+                                        replicas.append({"vmId": instance["vmId"], "ipv4": instance.get("ipv4"),
+                                                         "vmState": vm["state"], "instancePhase": instance.get("phase")})
+                                    snapshot["services"].append({"id": saved["id"], "phase": record["phase"],
+                                                                 "deploymentId": record["id"], "replicas": replicas,
+                                                                 "recovery": record.get("recovery")})
+                                view = api.call("GET", "/api/pipe")
+                                owned = {saved["id"] for saved in services}
+                                snapshot["routes"] = [{key: route.get(key) for key in ["host", "upstreams", "owner"]}
+                                                      for route in view["config"]["routes"]
+                                                      if (route.get("owner") or {}).get("serviceId") in owned]
+                            except Exception as capture_error:
+                                snapshot["captureError"] = str(capture_error)
+                            metrics["runtimeAtFailure"] = snapshot
             metrics["requests"][key] += 1
             stop.wait(metrics["requestIntervalSeconds"])
 

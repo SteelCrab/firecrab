@@ -112,9 +112,17 @@ pub fn proof(
     selection: &AiModelSelection,
     tools: bool,
 ) -> Result<SavedConnection, String> {
-    let saved = state
+    versioned_proof(state, selection, tools).map(|(saved, _)| saved)
+}
+
+fn versioned_proof(
+    state: &AppState,
+    selection: &AiModelSelection,
+    tools: bool,
+) -> Result<(SavedConnection, u64), String> {
+    let (saved, generation) = state
         .store
-        .ai_connection(selection.connection_id)
+        .ai_connection_with_generation(selection.connection_id)
         .map_err(|_| "Cannot read AI connection")?
         .ok_or("AI account is disconnected")?;
     let valid = state
@@ -136,7 +144,7 @@ pub fn proof(
         }
         .into());
     }
-    Ok(saved)
+    Ok((saved, generation))
 }
 
 /// Persist a checkpoint off the async worker before an external side effect.
@@ -574,7 +582,9 @@ async fn execute(
         )
         .await?;
         access::attempt(state, saved).map_err(execution_error)?;
-        let mut account = proof(state, &saved.task.selection, code).map_err(execution_error)?;
+        let (mut account, generation) =
+            versioned_proof(state, &saved.task.selection, code).map_err(execution_error)?;
+        let previous = account.clone();
         if account.connection.provider == AiProvider::Openai
             && state
                 .pipe_ai
@@ -584,7 +594,7 @@ async fn execute(
         {
             state
                 .store
-                .save_ai_connection(&account)
+                .refresh_ai_connection(&previous, &account, generation)
                 .map_err(|_| execution_error("Cannot save refreshed AI session"))?;
         }
         let mut connections = state

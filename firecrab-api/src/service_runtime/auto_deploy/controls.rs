@@ -9,12 +9,18 @@ pub async fn get(
 ) -> Result<Json<AutoDeployStatus>, AppError> {
     let id = vms::parse_id(&id, request.0)?;
     let store = state.store.clone();
-    let (service, watch) = database(request.0, move || {
-        Ok((store.micro_service(id)?, store.tag_watch(id)?))
+    let (service, watch, allowed) = database(request.0, move || {
+        let watch = store.tag_watch(id)?;
+        let allowed = watch
+            .as_ref()
+            .map(|w| store.automatic_watch_allowed(id, w))
+            .transpose()?
+            .unwrap_or(true);
+        Ok((store.micro_service(id)?, watch, allowed))
     })
     .await?;
     let service = service.ok_or_else(|| AppError::not_found(request.0))?;
-    Ok(Json(watch.map(|w| w.status).unwrap_or(AutoDeployStatus {
+    let mut status = watch.map(|w| w.status).unwrap_or(AutoDeployStatus {
         policy: service.spec.auto_deploy,
         pause: None,
         observed_digest: None,
@@ -23,7 +29,11 @@ pub async fn get(
         operation_id: None,
         failures: 0,
         error: None,
-    })))
+    });
+    if !allowed && status.policy.is_some() {
+        status.error = Some("Automatic Deploy is suspended by management ownership or unfinished work; explicitly reconfigure its policy after resolving ownership".into());
+    }
+    Ok(Json(status))
 }
 
 pub async fn configure(
@@ -45,6 +55,8 @@ pub async fn configure(
         ))
     })
     .await?;
+    let store = state.store.clone();
+    let authority = database(request.0, move || store.auto_deploy_authority(id)).await?;
     let mut service = service.ok_or_else(|| AppError::not_found(request.0))?;
     if owned {
         return Err(AppError::conflict(
@@ -68,11 +80,15 @@ pub async fn configure(
     if let Some(policy) = &policy {
         validate_auth(&state, policy, request.0).await?;
     }
-    let watch = policy.map(|policy| {
+    let expected_watch = watch.as_ref().map(|w| w.generation);
+    let mut watch = policy.map(|policy| {
         watch
             .filter(|w| w.status.policy.as_ref() == Some(&policy))
             .unwrap_or_else(|| Watch::new(policy))
     });
+    if let Some(watch) = &mut watch {
+        watch.authority = Some(authority.clone());
+    }
     if let Some(d) = &mut deployment {
         d.spec.auto_deploy = service.spec.auto_deploy.clone();
     }
@@ -80,7 +96,13 @@ pub async fn configure(
     tokio::spawn(async move {
         let _guard = guard;
         database(request.0, move || {
-            store.set_tag_policy(&service, deployment.as_ref(), watch.as_ref())
+            store.set_tag_policy(
+                &service,
+                deployment.as_ref(),
+                watch.as_ref(),
+                &authority,
+                expected_watch,
+            )
         })
         .await
     })
@@ -137,6 +159,10 @@ async fn control(
             request.0,
         )
     })?;
+    let store = state.store.clone();
+    let authority = database(request.0, move || store.auto_deploy_authority(id)).await?;
+    let expected_generation = watch.generation;
+    watch.authority = Some(authority);
     // Accepted operations retain their identity; pause controls future observations only.
     if let Some(p) = &watch.pending {
         let operation = p.operation;
@@ -161,7 +187,11 @@ async fn control(
     let status = watch.status.clone();
     tokio::spawn(async move {
         let _guard = guard;
-        persist(&state, id, watch).await
+        let store = state.store.clone();
+        database(request.0, move || {
+            store.save_tag_watch_checked(id, &watch, expected_generation, true)
+        })
+        .await
     })
     .await
     .map_err(|_| AppError::internal(request.0))??;

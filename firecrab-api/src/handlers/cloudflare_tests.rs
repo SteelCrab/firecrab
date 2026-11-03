@@ -113,6 +113,14 @@ async fn no_active_domain_explains_the_required_domain_setup() {
 
 #[tokio::test]
 async fn malformed_tokens_fail_before_cloudflare_or_helper_calls() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = crate::state::AppState::with_db_file(
+        crate::templates::TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .unwrap(),
+        directory.path().join("state.db"),
+    )
+    .await
+    .unwrap();
     let request =
         serde_json::from_value(json!({"apiToken":"invalid-command --token secret"})).unwrap();
     assert!(
@@ -122,8 +130,12 @@ async fn malformed_tokens_fail_before_cloudflare_or_helper_calls() {
     );
     let request=serde_json::from_value(json!({"apiToken":"invalid","zoneId":"invalid","hostname":"app.example.com","config":{"routes":[],"tunnel":null}})).unwrap();
     assert!(
-        connect(Extension(RequestId(uuid::Uuid::new_v4())), Json(request))
-            .await
-            .is_err()
+        connect(
+            axum::extract::State(state),
+            Extension(RequestId(uuid::Uuid::new_v4())),
+            Json(request)
+        )
+        .await
+        .is_err()
     );
 }

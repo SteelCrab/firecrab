@@ -1,4 +1,5 @@
 import { fetchJson } from "./client";
+import { nativeMutation, type NativeMutationResult } from "./nativeMutations";
 
 export type DatabaseProvider = "local" | "supabase" | "rds";
 export type DatabaseTlsMode = "disable" | "require" | "verify_full";
@@ -51,8 +52,15 @@ export function testPipeDatabase(
 }
 export function createPipeDatabase(
   input: DatabaseInput,
-): Promise<PipeDatabase> {
-  return post(base, input);
+): Promise<NativeMutationResult<PipeDatabase>> {
+  return nativeMutation(
+    "POST",
+    base,
+    input,
+    "create_database_connection",
+    "database_connection",
+    findConnection,
+  );
 }
 export function deletePipeDatabase(id: string): Promise<{ deleted: boolean }> {
   return fetchJson(base + "/" + encodeURIComponent(id), { method: "DELETE" });
@@ -75,13 +83,38 @@ export function previewDatabase(
   });
 }
 
+async function findConnection(id: string): Promise<PipeDatabase | null> {
+  return (
+    (await listPipeDatabases()).find((connection) => connection.id === id) ??
+    null
+  );
+}
+
 export function updatePipeDatabase(
   id: string,
   input: DatabaseInput,
-): Promise<PipeDatabase> {
-  return fetchJson(`${base}/${encodeURIComponent(id)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
+): Promise<NativeMutationResult<PipeDatabase>> {
+  return nativeMutation(
+    "PUT",
+    `${base}/${encodeURIComponent(id)}`,
+    input,
+    "update_database_connection",
+    "database_connection",
+    findConnection,
+    id,
+  );
+}
+export function changePipeDatabaseAccess(
+  id: string,
+  writeEnabled: boolean,
+): Promise<NativeMutationResult<PipeDatabase>> {
+  return nativeMutation(
+    "PUT",
+    `${base}/${encodeURIComponent(id)}/access`,
+    { writeEnabled },
+    "update_database_connection",
+    "database_connection",
+    findConnection,
+    id,
+  );
 }

@@ -315,6 +315,11 @@ fn verify_vm(
         || vm.template_kernel_sha256 != role.template.kernel_sha256
         || vm.template_rootfs_sha256 != role.template.rootfs_sha256
         || vm.template_boot_args_sha256 != role.template.boot_args_sha256
+        || vm
+            .boot_pin
+            .as_ref()
+            .and_then(|pin| pin.initrd_sha256.as_ref())
+            != role.template.initrd_sha256.as_ref()
         || vm.cpu != role.cpu
         || vm.ram != role.memory_mib
         || vm.disk_gb != role.disk_gb
@@ -406,12 +411,15 @@ async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Re
         } else {
             state
                 .store
-                .insert_security_group(&SecurityGroupResponse {
-                    id: reserved.security_group_id,
-                    name: name(environment, &reserved.role),
-                    micro_network_id: environment.network_id,
-                    rules: vec![],
-                })
+                .insert_environment_security_group(
+                    environment,
+                    &SecurityGroupResponse {
+                        id: reserved.security_group_id,
+                        name: name(environment, &reserved.role),
+                        micro_network_id: environment.network_id,
+                        rules: vec![],
+                    },
+                )
                 .map_err(|_| "Cannot reserve environment security group")?;
         }
         drop(network_mutation);
@@ -476,7 +484,11 @@ async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Re
         }
         state
             .store
-            .replace_security_group_rules(reserved.security_group_id, &expected)
+            .replace_environment_security_group_rules(
+                environment,
+                reserved.security_group_id,
+                &expected,
+            )
             .map_err(|_| "Cannot persist environment policy")?;
     }
     Ok(())
@@ -1161,7 +1173,7 @@ pub async fn cleanup(
             }
             state
                 .store
-                .delete_security_group(group.id)
+                .delete_environment_security_group(&environment, group.id)
                 .map_err(|_| "Cannot delete owned security group")?;
         }
     }

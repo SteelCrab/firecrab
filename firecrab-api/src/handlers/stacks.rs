@@ -18,6 +18,9 @@ use crate::persistence::{PersistenceError, Store};
 use crate::server::RequestId;
 use crate::state::AppState;
 
+mod guard;
+pub(crate) use guard::protect_resources;
+
 /// Idempotently register a stack name without storing or applying its manifest.
 pub async fn register(
     State(state): State<AppState>,
@@ -81,6 +84,7 @@ pub async fn bind(
     Path(name): Path<String>,
     ValidatedJson(binding): ValidatedJson<Binding>,
 ) -> Result<Json<StackRecord>, AppError> {
+    let _admission = state.stack_apply_admission.lock().await;
     let _claim = state.service_mutations.lock().await;
     change_binding(state.store.clone(), request_id.0, name, binding, false)
         .await
@@ -94,6 +98,7 @@ pub async fn unbind(
     Path(name): Path<String>,
     ValidatedJson(binding): ValidatedJson<Binding>,
 ) -> Result<Json<StackRecord>, AppError> {
+    let _admission = state.stack_apply_admission.lock().await;
     let _claim = state.service_mutations.lock().await;
     change_binding(state.store.clone(), request_id.0, name, binding, true)
         .await
@@ -145,12 +150,13 @@ pub async fn plan(
         ));
     }
     firecrab_stack::validate(&stack).map_err(|errors| validation_errors(errors, request_id.0))?;
+    let desired = stack.clone();
     let (record, inventory) = database(request_id.0, move || {
         let record = state
             .store
             .stack(&name)?
             .ok_or(PersistenceError::MissingStack)?;
-        let inventory = inventory(&state.store, &state.templates)?;
+        let inventory = inventory_for(&state, &desired)?;
         Ok((record, inventory))
     })
     .await?;
@@ -188,7 +194,7 @@ pub(crate) fn inventory(
                 template_kernel_sha256: vm.template_kernel_sha256,
                 template_rootfs_sha256: vm.template_rootfs_sha256,
                 template_boot_args_sha256: vm.template_boot_args_sha256,
-                template_pin: store.stack_vm_pin(vm.id, false)?,
+                template_pin: vm.boot_pin.or(store.stack_vm_pin(vm.id, false)?),
                 disk_generation: vm.disk_generation,
                 cpu: vm.cpu,
                 ram: vm.ram,
@@ -205,7 +211,16 @@ pub(crate) fn inventory(
         networks: store.list_micro_networks()?,
         vms,
         services,
+        secret_inputs: Default::default(),
+        deployment_secret_inputs: Default::default(),
     })
+}
+
+pub(crate) fn inventory_for(
+    state: &AppState,
+    stack: &Stack,
+) -> Result<Inventory, PersistenceError> {
+    crate::service_runtime::secrets::stack::with_inventory(state, stack, Ok)
 }
 
 pub(super) fn validate_name(name: &str, request_id: Uuid) -> Result<(), AppError> {
@@ -239,23 +254,150 @@ pub(crate) async fn database<T: Send + 'static>(
     request_id: Uuid,
     operation: impl FnOnce() -> Result<T, PersistenceError> + Send + 'static,
 ) -> Result<T, AppError> {
-    tokio::task::spawn_blocking(operation).await.map_err(|_| AppError::internal(request_id))?.map_err(|error| match error {
-        PersistenceError::MissingStack | PersistenceError::MissingStackSource => AppError::not_found(request_id),
-        PersistenceError::StaleStackSource => AppError::conflict("stale_stack_source", "read the current source generation before updating or checking it", request_id),
-        PersistenceError::StackSourceBusy => AppError::conflict("stack_source_busy", "wait for the active Git check before changing or deleting its configuration", request_id),
-        PersistenceError::StackSyncRecoveryRequired => AppError::conflict("stack_sync_recovery_required", "inspect the failed apply and acknowledge its operation ID before requesting a fresh sync", request_id),
-        PersistenceError::InvalidStackSource => AppError::new(StatusCode::BAD_REQUEST, "invalid_stack_source", "provide a valid Git source configuration", request_id),
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|_| AppError::internal(request_id))?
+        .map_err(|error| persistence_error(error, request_id))
+}
+
+/// Reuse sanitized persistence errors across host-local and controller APIs.
+pub(crate) fn persistence_error(error: PersistenceError, request_id: Uuid) -> AppError {
+    match error {
+        PersistenceError::IacCredentialVersionRequired => AppError::conflict(
+            "iac_credential_version_required",
+            "private value provenance changed; provide a new rotation version or explicitly retain the current value",
+            request_id,
+        ),
+        PersistenceError::IacResourceBusy => AppError::conflict(
+            "iac_resource_busy",
+            "inspect the current resource operation before changing this resource or its owner",
+            request_id,
+        ),
+        PersistenceError::IacManagedDependent => AppError::conflict(
+            "iac_dependent_managed",
+            "release or remove separately managed configuration before deleting its parent",
+            request_id,
+        ),
+        PersistenceError::IacParentManaged => AppError::conflict(
+            "iac_parent_managed",
+            "resource is generated by a parent controller; manage its parent instead",
+            request_id,
+        ),
+        PersistenceError::IacVaultUnavailable => AppError::unavailable(
+            "credential store is unavailable; ownership was not changed",
+            request_id,
+        ),
+        PersistenceError::IacEndpointConflict => AppError::conflict(
+            "iac_endpoint_mismatch",
+            "request belongs to a different API endpoint",
+            request_id,
+        ),
+        PersistenceError::InvalidIacOwner => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_iac_owner",
+            "provide valid resource, owner and operation identities",
+            request_id,
+        ),
+        PersistenceError::UnsupportedIacResource => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "unsupported_iac_resource",
+            "this resource adapter does not yet support safe ownership transfer",
+            request_id,
+        ),
+        PersistenceError::IacOwnershipConflict => AppError::conflict(
+            "iac_ownership_conflict",
+            "resource ownership conflicts; inspect the exact current owner",
+            request_id,
+        ),
+        PersistenceError::StaleIacExecution => AppError::conflict(
+            "iac_execution_changed",
+            "native execution changed; observe the original operation before recovering again",
+            request_id,
+        ),
+        PersistenceError::StaleIacOwner => AppError::conflict(
+            "stale_iac_owner",
+            "read the current owner and generation before changing ownership",
+            request_id,
+        ),
+        PersistenceError::IacOperationIdentity => AppError::conflict(
+            "iac_operation_identity_conflict",
+            "operation UUID requires the same typed action and exact resource request",
+            request_id,
+        ),
+        PersistenceError::MissingStack | PersistenceError::MissingStackSource => {
+            AppError::not_found(request_id)
+        }
+        PersistenceError::StaleStackSource => AppError::conflict(
+            "stale_stack_source",
+            "read the current source generation before updating or checking it",
+            request_id,
+        ),
+        PersistenceError::StackSourceBusy => AppError::conflict(
+            "stack_source_busy",
+            "wait for the active Git check before changing or deleting its configuration",
+            request_id,
+        ),
+        PersistenceError::StackSyncRecoveryRequired => AppError::conflict(
+            "stack_sync_recovery_required",
+            "inspect the failed apply and acknowledge its operation ID before requesting a fresh sync",
+            request_id,
+        ),
+        PersistenceError::InvalidStackSource => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_stack_source",
+            "provide a valid Git source configuration",
+            request_id,
+        ),
         PersistenceError::MissingStackApply => AppError::not_found(request_id),
-        PersistenceError::StackApplyBusy => AppError::conflict("stack_apply_busy", "wait for the active stack apply to finish", request_id),
-        PersistenceError::StaleStackPlan => AppError::conflict("stale_stack_plan", "host configuration or ownership changed; review a fresh plan", request_id),
-        PersistenceError::StackApplyIdentity => AppError::conflict("stack_apply_identity_conflict", "operation ID belongs to a different registration, declaration or stop permission", request_id),
-        PersistenceError::StackSourceManaged => AppError::conflict("stack_source_managed", "use source sync for a Git-managed stack; explicitly remove the source to return to manual apply", request_id),
-        PersistenceError::StackNotEmpty => AppError::new(StatusCode::CONFLICT, "stack_not_empty", "unbind every exact resource UUID before deleting stack registration", request_id),
-        PersistenceError::StackConflict => AppError::new(StatusCode::CONFLICT, "stack_ownership_conflict", "binding conflicts with existing ownership; unbind the exact UUID explicitly before changing it", request_id),
-        PersistenceError::InvalidStackResource => AppError::new(StatusCode::BAD_REQUEST, "invalid_stack_resource", "resource is missing, is a protected VM, or a service operation is in progress", request_id),
-        PersistenceError::StackBindingLimit => AppError::new(StatusCode::BAD_REQUEST, "stack_binding_limit", "a stack can own at most 256 resources", request_id),
-        _ => { tracing::error!(%request_id, "stack database operation failed"); AppError::internal(request_id) }
-    })
+        PersistenceError::StackApplyBusy => AppError::conflict(
+            "stack_apply_busy",
+            "wait for the active stack apply to finish",
+            request_id,
+        ),
+        PersistenceError::StaleStackPlan => AppError::conflict(
+            "stale_stack_plan",
+            "host configuration or ownership changed; review a fresh plan",
+            request_id,
+        ),
+        PersistenceError::StackApplyIdentity => AppError::conflict(
+            "stack_apply_identity_conflict",
+            "operation ID belongs to a different registration, declaration or stop permission",
+            request_id,
+        ),
+        PersistenceError::StackSourceManaged => AppError::conflict(
+            "stack_source_managed",
+            "use source sync for a Git-managed stack; explicitly remove the source to return to manual apply",
+            request_id,
+        ),
+        PersistenceError::StackNotEmpty => AppError::new(
+            StatusCode::CONFLICT,
+            "stack_not_empty",
+            "unbind every exact resource UUID before deleting stack registration",
+            request_id,
+        ),
+        PersistenceError::StackConflict => AppError::new(
+            StatusCode::CONFLICT,
+            "stack_ownership_conflict",
+            "binding conflicts with existing ownership; unbind the exact UUID explicitly before changing it",
+            request_id,
+        ),
+        PersistenceError::InvalidStackResource => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_stack_resource",
+            "resource is missing, is a protected VM, or a service operation is in progress",
+            request_id,
+        ),
+        PersistenceError::StackBindingLimit => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "stack_binding_limit",
+            "a stack can own at most 256 resources",
+            request_id,
+        ),
+        _ => {
+            tracing::error!(%request_id, "stack database operation failed");
+            AppError::internal(request_id)
+        }
+    }
 }
 
 #[cfg(test)]

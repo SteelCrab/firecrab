@@ -11,6 +11,8 @@ use crate::model::VmRecord;
 use crate::secrets::{Contents, SecretError, Vault};
 use crate::state::AppState;
 
+pub(crate) mod stack;
+
 /// Reject missing or incompatible Secrets before accepting deployment work.
 pub(super) async fn preflight(
     state: &AppState,
@@ -82,12 +84,26 @@ pub(super) async fn capture(
     let id = deployment.id;
     let store = state.store.clone();
     let service_id = deployment.service_id;
-    let controller_owned = crate::cluster::stored(move || store.cluster_service_worker(service_id))
-        .await
-        .map_err(|_| "Could not read controller service ownership")?
-        .is_some();
+    let owner_store = store.clone();
+    let deployment = deployment.clone();
+    let controller_owned =
+        crate::cluster::stored(move || owner_store.cluster_service_worker(service_id))
+            .await
+            .map_err(|_| "Could not read controller service ownership")?
+            .is_some();
     vault(state, move |vault| {
         vault.write(|contents| {
+            if stack::capture(&store, contents, &deployment)? {
+                return Ok(());
+            }
+            if !store
+                .stack_service_mutation_allowed(service_id, None)
+                .map_err(|_| SecretError::Storage)?
+            {
+                return Err(SecretError::Invalid(
+                    "original Stack credentials are unavailable",
+                ));
+            }
             if contents.service_environments.contains_key(&id) {
                 return Ok(());
             }
@@ -118,11 +134,20 @@ pub(super) async fn remove(
     let id = deployment.id;
     vault(state, move |vault| {
         // Most calls follow an already completed cleanup; avoid rewriting the vault.
-        if !vault.read(|contents| Ok(contents.service_environments.contains_key(&id)))? {
+        if !vault.read(|contents| {
+            Ok(contents.service_environments.contains_key(&id)
+                || contents
+                    .stack_service_credentials
+                    .get(&id)
+                    .is_some_and(|scope| scope.values.is_some()))
+        })? {
             return Ok(());
         }
         vault.write(|contents| {
             contents.service_environments.remove(&id);
+            if let Some(scope) = contents.stack_service_credentials.get_mut(&id) {
+                scope.values = None;
+            }
             Ok(())
         })
     })

@@ -74,6 +74,12 @@ pub(crate) async fn restore_cached(
     if state.oci_imports.is_running(alias) {
         return Ok(false);
     }
+    let authority = crate::image_lifecycle::capture(&state.templates, alias)
+        .map_err(|_| "Image management authority is unavailable")?;
+    let templates = (*state.templates)
+        .clone()
+        .with_image_authority(authority)
+        .map_err(|_| "Image management authority changed")?;
     let state = state.clone();
     let alias = alias.to_owned();
     let digest = digest.to_owned();
@@ -96,8 +102,7 @@ pub(crate) async fn restore_cached(
             {
                 continue;
             }
-            state
-                .templates
+            templates
                 .register_spec(spec)
                 .map_err(|_| "Could not restore the journaled Deploy image")?;
             return Ok(true);

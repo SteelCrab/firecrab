@@ -152,6 +152,9 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .allow_headers([
             header::CONTENT_TYPE,
             HeaderName::from_static("idempotency-key"),
+            HeaderName::from_static("x-firecrab-operation-id"),
+            HeaderName::from_static("x-firecrab-endpoint-id"),
+            HeaderName::from_static("x-firecrab-execution-generation"),
         ]);
     if !config.allowed_origins.is_empty() {
         cors = cors.allow_origin(AllowOrigin::list(config.allowed_origins.clone()));
@@ -177,7 +180,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/vms/{id}",
             get(handlers::vms::get_vm)
                 .put(handlers::vms::update_vm)
-                .delete(handlers::vms::delete_vm),
+                .delete(handlers::vm_deletion::route),
         )
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
@@ -208,13 +211,83 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 
     let rest = Router::new()
         .route(
+            "/api/vms/{id}/boot-inputs",
+            get(handlers::vm_boot::inspect).put(handlers::vm_boot::review),
+        )
+        .route("/api/iac/identity", get(handlers::iac::identity))
+        .route(
+            "/api/iac/resources/{kind}/{id}",
+            get(handlers::iac_resource_plans::resource),
+        )
+        .route(
+            "/api/iac/resource-plans",
+            post(handlers::iac_resource_plans::plan),
+        )
+        .route(
+            "/api/iac/resource-plans/{id}",
+            get(handlers::iac_resource_plans::get),
+        )
+        .route(
+            "/api/iac/resource-plans/{id}/receipt",
+            get(handlers::iac_resource_plans::receipt),
+        )
+        .route(
+            "/api/iac/resource-plans/{id}/credentials",
+            post(handlers::iac_resource_plans::upload),
+        )
+        .route(
+            "/api/iac/resource-plans/{id}/apply",
+            post(handlers::iac_resource_plans::apply),
+        )
+        .route(
+            "/api/iac/native/identity",
+            get(handlers::iac::native_identity),
+        )
+        .route(
+            "/api/iac/native/host-configuration/identity",
+            get(handlers::iac::native_configuration_identity),
+        )
+        .route("/api/iac/owners", get(handlers::iac::owners))
+        .route(
+            "/api/iac/native-operations",
+            get(handlers::iac_queries::native_operations),
+        )
+        .route("/api/iac/owner-changes/{id}", get(handlers::iac::operation))
+        .route(
+            "/api/iac/native-operations/{id}",
+            get(handlers::iac::native_operation),
+        )
+        .route(
+            "/api/iac/native-operations/resources/{kind}/{resource}",
+            get(handlers::iac::native_resource_operations),
+        )
+        .route(
+            "/api/iac/native-operations/{id}/recover",
+            post(handlers::iac::recover_native_operation),
+        )
+        .route(
+            "/api/iac/native-operations/{id}/vm-storage",
+            get(handlers::vm_storage::observe).post(handlers::vm_storage::review),
+        )
+        .route("/api/iac/owners/{kind}/{id}", get(handlers::iac::owner))
+        .route(
+            "/api/iac/owners/transition",
+            post(handlers::iac::change_owner),
+        )
+        .route(
             "/api/stacks",
             get(handlers::stacks::list).post(handlers::stacks::register),
         )
         .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
         .route(
             "/api/stacks/{name}/source",
-            get(handlers::stack_sources::get).put(handlers::stack_sources::configure),
+            get(handlers::stack_sources::get)
+                .put(handlers::stack_sources::configure)
+                .delete(handlers::stack_sources::remove),
+        )
+        .route(
+            "/api/stacks/{name}/source/generation",
+            get(handlers::stack_sources::generation),
         )
         .route(
             "/api/stacks/{name}/source/check",
@@ -420,7 +493,8 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/pipe/database-rabbitmq",
-            get(handlers::pipe_database_events::rabbitmq_get),
+            get(handlers::pipe_database_events::rabbitmq_get)
+                .delete(handlers::pipe_database_events::rabbitmq_disconnect),
         )
         .route(
             "/api/pipe/database-rabbitmq/managed",
@@ -481,6 +555,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             post(handlers::pipe_database_maintenance::restore),
         )
         .route(
+            "/api/pipe/database-jobs/{id}",
+            get(handlers::pipe_database_maintenance::get),
+        )
+        .route(
+            "/api/pipe/database-jobs/{id}/retry",
+            post(handlers::pipe_database_maintenance::retry),
+        )
+        .route(
             "/api/pipe/database-jobs/{id}/backup",
             get(handlers::pipe_database_maintenance::download)
                 .delete(handlers::pipe_database_maintenance::delete_backup),
@@ -535,7 +617,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .put(handlers::microregistry::put_docker_hub_credential)
                 .delete(handlers::microregistry::delete_docker_hub_credential),
         )
-        .route("/api/oci/import", post(handlers::oci::start_oci_import))
+        .route("/api/oci/import", post(handlers::image_mutations::import))
         .route(
             "/api/oci/import/{alias}",
             get(handlers::oci::get_oci_import),
@@ -543,25 +625,24 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/images", get(handlers::images::list_images))
         .route(
             "/api/images/{alias}",
-            get(handlers::images::list_image_detail).delete(handlers::images::delete_image),
+            get(handlers::images::list_image_detail).delete(handlers::image_mutations::delete),
         )
         .route(
             "/api/images/{alias}/kernel",
-            axum::routing::put(handlers::images::update_image_kernel),
+            axum::routing::put(handlers::image_mutations::kernel),
         )
         .route("/api/kernels", get(handlers::kernels::list_kernels))
         .route(
             "/api/kernels/{version}",
-            delete(handlers::kernels::delete_kernel),
+            delete(handlers::kernel_mutations::delete),
         )
         .route(
             "/api/kernels/{version}/install",
-            get(handlers::kernels::get_kernel_install)
-                .post(handlers::kernels::start_kernel_install),
+            get(handlers::kernel_mutations::get).post(handlers::kernel_mutations::install),
         )
         .route(
             "/api/images/{alias}/install",
-            get(handlers::images::get_image_install).post(handlers::images::start_image_install),
+            get(handlers::images::get_image_install).post(handlers::image_mutations::install),
         )
         .route(
             "/api/images/{alias}/package",
@@ -689,6 +770,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/shells/{id}/revisions/{revision_id}",
             get(handlers::shells::get_shell_revision),
         )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            handlers::stacks::protect_resources,
+        ))
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -781,6 +866,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/secrets/plans/{id}/apply",
             post(handlers::secrets::apply),
         )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            handlers::stacks::protect_resources,
+        ))
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -888,6 +977,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/ai-sandbox/tasks/{id}/artifacts/{artifact}",
             get(handlers::ai_sandbox::get_artifact),
         )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            handlers::stacks::protect_resources,
+        ))
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -942,6 +1035,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::registries::repositories),
         )
         .route("/api/pipe/registry-tags", get(handlers::registries::tags))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            handlers::stacks::protect_resources,
+        ))
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -973,7 +1070,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/micro-services/{id}/observability/otlp",
-            axum::routing::put(crate::service_observation::configure),
+            get(crate::service_observation::settings).put(crate::service_observation::configure),
         )
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
@@ -1020,6 +1117,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ));
 
     let cluster = crate::cluster::handlers::router()
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            handlers::stacks::protect_resources,
+        ))
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -1553,6 +1654,7 @@ mod tests {
             write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: firecrab_helper_protocol::PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result: Ok(()),
@@ -1696,6 +1798,7 @@ mod tests {
                 write_frame(
                     &mut stream,
                     &NetworkResponseEnvelope {
+                        host_iac: None,
                         version: firecrab_helper_protocol::PROTOCOL_VERSION,
                         request_id: envelope.request_id,
                         result: Ok(()),

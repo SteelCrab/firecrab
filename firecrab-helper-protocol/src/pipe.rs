@@ -111,7 +111,7 @@ fn default_path() -> String {
 }
 
 /// Accept only literal lowercase DNS names safe for native engine configs.
-fn hostname(host: &str) -> bool {
+pub(crate) fn hostname(host: &str) -> bool {
     !host.is_empty()
         && host.len() <= 253
         && host.split('.').all(|label| {
@@ -131,13 +131,13 @@ pub fn valid_route_hostname(host: &str) -> bool {
 }
 
 /// Reserve generated anonymous-connector hosts from editable local route groups.
-fn reserved_quick_host(host: &str) -> bool {
+pub(crate) fn reserved_quick_host(host: &str) -> bool {
     host == QUICK_TUNNEL_HOST
         || (host.starts_with("quick-") && host.ends_with(".firecrab.internal"))
 }
 
 /// Reject wildcard, interpolation and directive syntax in literal paths.
-fn path(path: &str) -> bool {
+pub(crate) fn path(path: &str) -> bool {
     path.starts_with('/')
         && path.bytes().all(|c| {
             c.is_ascii_graphic()
@@ -473,7 +473,10 @@ impl Config {
                         text.push_str(&format!("    location {location} {{{access_log} root /dev/null; try_files /unready =503; }}\n"));
                         continue;
                     }
-                    text.push_str(&format!("    location {location} {{{access_log}\n      proxy_pass http://fc_route_{index};\n      proxy_http_version 1.1;\n      proxy_set_header Host {proxy_host};\n      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n      proxy_set_header X-Forwarded-Proto {proto};\n      proxy_set_header Upgrade $http_upgrade;\n      proxy_set_header Connection $fc_connection;\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 30s;\n      proxy_next_upstream error timeout http_500 http_502 http_503 http_504;\n      proxy_next_upstream_timeout 3s;\n    }}\n"));
+                    // An upstream may exit after a valid long response wait.
+                    // Bound attempts by distinct peers, not time already spent waiting.
+                    let attempts = route.upstreams.len();
+                    text.push_str(&format!("    location {location} {{{access_log}\n      proxy_pass http://fc_route_{index};\n      proxy_http_version 1.1;\n      proxy_set_header Host {proxy_host};\n      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n      proxy_set_header X-Forwarded-Proto {proto};\n      proxy_set_header Upgrade $http_upgrade;\n      proxy_set_header Connection $fc_connection;\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 30s;\n      proxy_next_upstream error timeout http_500 http_502 http_503 http_504;\n      proxy_next_upstream_timeout 0;\n      proxy_next_upstream_tries {attempts};\n    }}\n"));
                 }
             }
             if !has_fallback {
@@ -779,6 +782,11 @@ mod tests {
         assert!(text.contains("location = /__firecrab/deploy"));
         assert!(text.contains("location ^~ /__firecrab/deploy/"));
         assert!(text.contains("proxy_next_upstream off;"));
+        assert!(text.contains("proxy_next_upstream_timeout 0;"));
+        assert!(text.contains("proxy_next_upstream_tries 2;"));
+        assert!(text.contains("proxy_connect_timeout 2s;"));
+        assert!(text.contains("proxy_read_timeout 30s;"));
+        assert!(!text.contains("non_idempotent"));
         assert!(!text.contains("127.0.0.1:5523"));
         config.routes[0].host = "app.internal".into();
         config.routes[0].network = Some(

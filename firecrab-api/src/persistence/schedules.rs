@@ -139,6 +139,20 @@ fn busy(conn: &Connection, id: Uuid) -> Result<bool, PersistenceError> {
     )?)
 }
 
+/// HTTP preflight cannot authorize a later write after another process takes ownership.
+fn public_write(conn: &Connection, id: Uuid) -> Result<(), PersistenceError> {
+    if !super::iac_owners::public_write_allowed(
+        conn,
+        &firecrab_stack::ManagedResource {
+            kind: "schedule".into(),
+            id: id.to_string(),
+        },
+    )? {
+        return Err(PersistenceError::IacOwnershipConflict);
+    }
+    Ok(())
+}
+
 /// Find the next occurrence after both `now` and the latest retained claim instant.
 /// Disabled schedules have no next occurrence. A backwards clock adjustment must
 /// not reuse an already claimed instant.
@@ -163,18 +177,42 @@ fn next(
 }
 
 impl Store {
-    /// SQLite's POSIX locks are separate from this whole-process advisory lock.
-    /// Hold it before recovery so a second API cannot interrupt a live worker.
+    /// Hold before recovery so a second API cannot interrupt a live worker.
+    /// Linux retains the original database lock for compatibility with older APIs.
+    /// macOS needs a separate file because its flock conflicts with SQLite locks.
     pub(crate) fn scheduler_lock(&self) -> Result<std::fs::File, PersistenceError> {
         let conn = self.lock();
         let path = conn
             .path()
             .ok_or_else(|| corrupt("scheduler requires a file-backed database"))?;
+        #[cfg(not(target_os = "macos"))]
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(path)
             .map_err(corrupt)?;
+        #[cfg(target_os = "macos")]
+        let file = {
+            use std::os::unix::fs::OpenOptionsExt;
+            // Resolve aliases before choosing the lock identity. Never follow a lock-file symlink.
+            let mut name = std::fs::canonicalize(path)
+                .map_err(corrupt)?
+                .into_os_string();
+            name.push(".scheduler.lock");
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(name)
+                .map_err(corrupt)?;
+            if !file.metadata().map_err(corrupt)?.is_file() {
+                return Err(corrupt("scheduler lock must be a regular file"));
+            }
+            file
+        };
         file.try_lock().map_err(|error| {
             corrupt(format!(
                 "scheduler database is already owned or cannot be locked: {error}"
@@ -205,7 +243,12 @@ impl Store {
         &self,
         schedule: &ScheduleResponse,
     ) -> Result<(), PersistenceError> {
-        write(&self.lock(), schedule)
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        public_write(&tx, schedule.id)?;
+        write(&tx, schedule)?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Active operations reject edits and deletion. Disabling is always allowed.
@@ -223,6 +266,7 @@ impl Store {
     ) -> Result<ScheduleMutation, PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        public_write(&tx, id)?;
         let Some(mut schedule) = get(&tx, id)? else {
             return Ok(ScheduleMutation::Missing);
         };
@@ -371,3 +415,6 @@ impl Store {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod iac_tests;

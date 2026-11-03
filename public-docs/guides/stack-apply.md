@@ -21,6 +21,9 @@ Without `--expected-plan`, the CLI requests a fresh plan immediately before appl
 With `--expected-plan`, the server rejects changes to the declaration, ownership, selected template content or observed host configuration with `409 stale_stack_plan`.
 Plan `inputs.templates` contains exact installed version, kernel, rootfs, optional initrd and boot-argument hashes.
 `inputs.serviceDigests` contains declared OCI digest identities.
+`inputs.serviceSecrets` contains exact borrowed Secret UUIDs, vault versions and
+ownership generations. [Deployment credentials](iac-stack-credentials.md) remain
+encrypted and are frozen before admission.
 An explicit VM `templatePin` selects that exact installed version even if the alias is later repointed.
 Without it, alias resolution is covered by the reviewed plan fingerprint.
 Changed artifact bytes reject apply before resource mutation with `stack_template_changed`.
@@ -50,6 +53,10 @@ The first version supports these operations:
 Standalone VM lifecycle is outside this schema. A newly created VM remains stopped until explicitly started.
 Service replicas use the existing deployment controller and its image, capacity, port and policy checks.
 Service deployment success requires the exact accepted deployment ID to reach `running` with healthy replicas.
+Initial and rolling deployments retain the same deterministic child UUID for one
+Stack apply and service. A retry reads that original attempt before selecting a
+deployment strategy or stopping replicas. Different inputs or parent authority
+cannot reuse it. A failed original attempt is not replaced by another deployment.
 Matching configuration alone does not repair an unhealthy service.
 
 ## Interrupting existing workloads
@@ -132,7 +139,10 @@ Active applies prevent binding changes and registration deletion.
 
 The existing 64 KiB API request body limit applies, including the JSON request envelope.
 Offline validation's 1 MiB YAML limit does not raise that API limit.
-The planner and executor perform optimistic configuration checks; a multi-resource apply is not an atomic transaction with manual API edits.
+While an apply is queued or running, direct VM/network mutations of its bound or reserved resources return `409 stack_apply_busy`.
+Reads and apply-status polling remain available; request headers cannot bypass the ownership check.
+Admission is serialized with direct edits, within the normal API concurrency and timeout limits.
+The planner and executor still perform optimistic configuration checks; a multi-resource apply is not an atomic transaction with every service controller.
 Existing per-resource operations still enforce their locks and validation.
 Partial success is recorded rather than hidden.
 Git sources use [source synchronization](stack-git-source.md) as their sole apply writer.

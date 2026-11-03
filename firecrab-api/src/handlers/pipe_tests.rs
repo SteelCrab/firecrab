@@ -125,6 +125,7 @@ async fn pipe_inspect_response(
         write_frame(
             &mut stream,
             &NetworkResponseEnvelope {
+                host_iac: None,
                 version: firecrab_helper_protocol::PROTOCOL_VERSION,
                 request_id: request.request_id,
                 result,

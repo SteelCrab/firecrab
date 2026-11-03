@@ -55,6 +55,72 @@ fn binding() -> SandboxTunnelBinding {
 }
 
 #[test]
+fn iac_fixed_address_owner_and_sandbox_claim_cannot_cross_each_others_admission() {
+    use firecrab_helper_protocol::host_iac::{HostIdentity, OwnerChange, OwnerReceipt};
+    use firecrab_stack::{ChangeResourceOwner, Manager, ResourceOwner, ResourceOwnership};
+    for claim_first in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = crate::persistence::Store::open(&directory.path().join("state.db")).unwrap();
+        let row = binding();
+        let endpoint = store.iac_endpoint_id().unwrap();
+        let change = ChangeResourceOwner {
+            operation_id: Uuid::new_v4(),
+            expected_endpoint_id: endpoint,
+            resource: firecrab_helper_protocol::host_iac::firecrab_tunnel_resource(
+                &row.spec.subdomain,
+            ),
+            expected_generation: 0,
+            expected_owner: None,
+            owner: Some(ResourceOwner {
+                manager: Manager::Terraform,
+                id: Uuid::new_v4(),
+                key: "firecrab_fixed_address.preview".into(),
+            }),
+        };
+        let intent = OwnerChange {
+            change: change.clone(),
+            configuration_sha256: "b".repeat(64),
+            host: HostIdentity {
+                machine_id: "a".repeat(32),
+                configuration_root: "/etc/firecrab".into(),
+                device: 1,
+                inode: 42,
+            },
+        };
+        if claim_first {
+            store.save_sandbox_tunnel(&row).unwrap();
+            assert!(store.prepare_host_owner(intent).is_err());
+            assert!(
+                store
+                    .host_owner_intent(change.operation_id)
+                    .unwrap()
+                    .is_none()
+            );
+        } else {
+            store.prepare_host_owner(intent.clone()).unwrap();
+            assert!(store.save_sandbox_tunnel(&row).is_err());
+            assert!(store.sandbox_tunnel(row.id).unwrap().is_none());
+            let result = OwnerReceipt {
+                operation_id: change.operation_id,
+                request_sha256: intent.request_sha256().unwrap(),
+                host: intent.host,
+                confirmed: false,
+                ownership: ResourceOwnership {
+                    endpoint_id: endpoint,
+                    resource: change.resource.clone(),
+                    generation: 1,
+                    owner: change.owner.clone(),
+                },
+            };
+            store.commit_host_owner(&change, result).unwrap();
+            store.confirm_host_owner(change.operation_id).unwrap();
+            assert!(store.save_sandbox_tunnel(&row).is_err());
+            assert!(store.sandbox_tunnel(row.id).unwrap().is_none());
+        }
+    }
+}
+
+#[test]
 fn preview_mapping_reserves_only_its_vm_until_confirmed_stop() {
     use SandboxTunnelState::*;
     for (status, connector, target, blocked) in [
@@ -322,6 +388,170 @@ fn task(state: &AppState, binding: &SandboxTunnelBinding) {
     state.store.save_sandbox_project(&project).unwrap();
     let task:crate::ai_sandbox::SavedTask=serde_json::from_value(json!({"caller":{"principal":"local","operator":true},"project":spec,"workspace":null,"guest":binding.runtime,"guest_pending":false,"guest_staged":false,"task":{"id":binding.task_id,"projectId":binding.project_id,"attemptId":binding.attempt_id,"runtime":binding.runtime,"request":{"kind":"code","input":"App task","selection":null,"retryOf":null},"selection":{"connectionId":Uuid::new_v4(),"model":"fixture"},"state":"result","createdAt":1,"updatedAt":2,"result":"Ready","errorCode":null,"error":null,"events":[],"changes":[]}})).unwrap();
     state.store.save_sandbox_task(&task).unwrap();
+}
+
+#[tokio::test]
+async fn iac_preview_transfer_preserves_binding_and_rejects_public_native_and_late_writers() {
+    use axum::{body::Body, http::Request};
+    use firecrab_stack::{ChangeResourceOwner, ManagedResource, Manager, ResourceOwner};
+    use tower::ServiceExt;
+    let directory = tempfile::tempdir().unwrap();
+    let state = state(directory.path()).await;
+    let mut row = binding();
+    row.state = SandboxTunnelState::Stopped;
+    task(&state, &row);
+    state.store.save_sandbox_tunnel(&row).unwrap();
+    let original_task = state.store.sandbox_task(row.task_id).unwrap().unwrap();
+    let change = ChangeResourceOwner {
+        operation_id: Uuid::new_v4(),
+        expected_endpoint_id: state.store.iac_endpoint_id().unwrap(),
+        resource: ManagedResource {
+            kind: "sandbox_tunnel".into(),
+            id: row.id.to_string(),
+        },
+        expected_generation: 0,
+        expected_owner: None,
+        owner: Some(ResourceOwner {
+            manager: Manager::Terraform,
+            id: Uuid::new_v4(),
+            key: "firecrab_sandbox_preview.app".into(),
+        }),
+    };
+    let owner = state.store.change_iac_resource_owner(&change).unwrap();
+    assert_eq!(owner.generation, 1);
+    assert_eq!(
+        state.store.sandbox_tunnel(row.id).unwrap(),
+        Some(row.clone())
+    );
+    assert_eq!(
+        serde_json::to_value(state.store.sandbox_task(row.task_id).unwrap().unwrap().task).unwrap(),
+        serde_json::to_value(original_task.task).unwrap()
+    );
+    let router = crate::server::build_router(
+        state.clone(),
+        &crate::server::HttpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            allowed_origins: vec![],
+            max_concurrent_requests: 16,
+            request_timeout: Duration::from_secs(10),
+            static_root: None,
+        },
+    )
+    .layer(axum::Extension(crate::ai_sandbox::access::LocalOperator));
+    for (method, suffix) in [
+        ("POST", "/stop"),
+        ("POST", "/publish"),
+        ("POST", "/reconcile"),
+        ("DELETE", ""),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(format!("/api/ai-sandbox/tunnels/{}{suffix}", row.id))
+                    .header("host", "127.0.0.1:5523")
+                    .header("x-firecrab-manager", "terraform")
+                    .header(
+                        "x-firecrab-owner",
+                        owner.owner.as_ref().unwrap().id.to_string(),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{method} {suffix}");
+    }
+    let mut late = row.clone();
+    late.updated_at += 1;
+    late.state = SandboxTunnelState::Connecting;
+    assert!(state.store.save_sandbox_tunnel(&late).is_err());
+    assert_eq!(
+        state.store.sandbox_tunnel(row.id).unwrap(),
+        Some(row.clone())
+    );
+    let released = state
+        .store
+        .change_iac_resource_owner(&ChangeResourceOwner {
+            operation_id: Uuid::new_v4(),
+            expected_generation: 1,
+            expected_owner: change.owner.clone(),
+            owner: None,
+            ..change.clone()
+        })
+        .unwrap();
+    assert_eq!(released.generation, 2);
+    assert_eq!(
+        state.store.change_iac_resource_owner(&change).unwrap(),
+        owner
+    );
+    assert_eq!(
+        state.store.iac_resource_owner(&change.resource).unwrap(),
+        released
+    );
+    row.updated_at += 1;
+    state.store.save_sandbox_tunnel(&row).unwrap();
+    row.state = SandboxTunnelState::NeedsReconciliation;
+    row.updated_at += 1;
+    state.store.save_sandbox_tunnel(&row).unwrap();
+    assert!(
+        state
+            .store
+            .change_iac_resource_owner(&ChangeResourceOwner {
+                operation_id: Uuid::new_v4(),
+                expected_generation: 2,
+                ..change
+            })
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn iac_preview_admission_rejects_uncertain_work_and_changed_original_attempt() {
+    use firecrab_stack::{ChangeResourceOwner, ManagedResource, Manager, ResourceOwner};
+    for status in [
+        SandboxTunnelState::Connecting,
+        SandboxTunnelState::Stopping,
+        SandboxTunnelState::Deleting,
+        SandboxTunnelState::NeedsReconciliation,
+        SandboxTunnelState::Stopped,
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let state = state(directory.path()).await;
+        let mut row = binding();
+        task(&state, &row);
+        row.state = status;
+        if status == SandboxTunnelState::Stopped {
+            row.attempt_id = Uuid::new_v4();
+        }
+        state.store.save_sandbox_tunnel(&row).unwrap();
+        let request = ChangeResourceOwner {
+            operation_id: Uuid::new_v4(),
+            expected_endpoint_id: state.store.iac_endpoint_id().unwrap(),
+            resource: ManagedResource {
+                kind: "sandbox_tunnel".into(),
+                id: row.id.to_string(),
+            },
+            expected_generation: 0,
+            expected_owner: None,
+            owner: Some(ResourceOwner {
+                manager: Manager::Terraform,
+                id: Uuid::new_v4(),
+                key: "firecrab_sandbox_preview.app".into(),
+            }),
+        };
+        assert!(state.store.change_iac_resource_owner(&request).is_err());
+        assert_eq!(state.store.sandbox_tunnel(row.id).unwrap(), Some(row));
+        assert!(
+            state
+                .store
+                .iac_resource_owner(&request.resource)
+                .unwrap()
+                .owner
+                .is_none()
+        );
+    }
 }
 
 #[tokio::test]
@@ -754,6 +984,7 @@ async fn pending_handoff_can_stop_the_verified_predecessor_before_any_new_publis
             write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: firecrab_helper_protocol::PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result: Ok(()),
@@ -958,6 +1189,7 @@ async fn raw_start_waits_until_sandbox_stop_has_persisted_its_inactive_snapshot(
                 write_frame(
                     &mut stream,
                     &NetworkResponseEnvelope {
+                        host_iac: None,
                         version: firecrab_helper_protocol::PROTOCOL_VERSION,
                         request_id: envelope.request_id,
                         result: Ok(()),
@@ -971,6 +1203,7 @@ async fn raw_start_waits_until_sandbox_stop_has_persisted_its_inactive_snapshot(
             write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: firecrab_helper_protocol::PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result: Ok(()),

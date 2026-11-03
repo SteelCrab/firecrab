@@ -89,6 +89,7 @@ pub fn version_for_path(path: &Path) -> Option<String> {
 }
 
 /// Build or reuse a kernel and record the install job's final result.
+#[cfg(test)]
 pub async fn run_install(
     tracker: ImageInstallTracker,
     templates: TemplateRegistry,

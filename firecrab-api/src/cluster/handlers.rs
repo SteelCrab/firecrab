@@ -49,6 +49,9 @@ pub(crate) fn error(error: ClusterError, request: RequestId) -> AppError {
             "request conflicts with the recorded owner, generation or idempotency key",
             request.0,
         ),
+        ClusterError::Persistence(error) => {
+            crate::handlers::stacks::persistence_error(error, request.0)
+        }
         ClusterError::Missing => AppError::not_found(request.0),
         ClusterError::Capacity => AppError::conflict(
             "insufficient_capacity",

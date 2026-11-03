@@ -29,6 +29,9 @@ pub fn run(check: bool, apply: bool, json: bool) -> Result<i32, Error> {
             .map_err(|error| Error::Guest(error.to_string()));
     }
 
+    let home = super::native_iac_home().map_err(Error::Guest)?;
+    let _installation = crate::native_host::installation_guard(&home)
+        .map_err(|error| Error::Guest(error.to_string()))?;
     // Do not call the old guest CLI's --apply: its helper protocol may differ
     // from the running development helper. The verified installer upgrades the
     // API, CLI, helper and units together before starting the release API.

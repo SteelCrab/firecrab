@@ -4,21 +4,23 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use firecrab_api_types::{
-    ImageInstallResponse, ImageInstallStatus, ImageResponse, PackageOrigin,
-    UpdateImageKernelRequest,
-};
+use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus, ImageResponse, PackageOrigin};
 
 use crate::error::AppError;
+#[cfg(test)]
 use crate::extract::ValidatedJson;
 use crate::image_install;
 use crate::image_install::Architecture;
+#[cfg(test)]
 use crate::kernel_manager;
+#[cfg(test)]
 use crate::oci::kernel as kernel_cache;
 use crate::persistence::LocalCatalogEntry;
 use crate::server::RequestId;
 use crate::state::AppState;
 use crate::templates::{TemplateRegistry, TemplateSpec, TemplateVersion};
+#[cfg(test)]
+use firecrab_api_types::UpdateImageKernelRequest;
 
 /// Smallest disk (GiB) that can hold `rootfs_bytes`, matching create validation.
 fn min_disk_gb_for(rootfs_bytes: u64) -> u16 {
@@ -59,7 +61,10 @@ pub(crate) fn installed_response(
     }
 }
 
-fn installed_response_for_state(state: &AppState, template: &TemplateVersion) -> ImageResponse {
+pub(crate) fn installed_response_for_state(
+    state: &AppState,
+    template: &TemplateVersion,
+) -> ImageResponse {
     installed_response(
         &state.templates,
         template,
@@ -206,6 +211,7 @@ pub async fn list_image_detail(
 /// `PUT /api/images/{alias}/kernel` — pair an installed image with an
 /// installed managed kernel. The rootfs remains unchanged and existing VM
 /// records are protected by refusing updates while the alias is in use.
+#[cfg(test)]
 pub async fn update_image_kernel(
     State(state): State<AppState>,
     Path(alias): Path<String>,
@@ -319,6 +325,15 @@ pub async fn update_image_kernel(
         }
     }
 
+    let _kernel_lease = crate::kernel_lifecycle::borrow_existing(&state.templates, &version)
+        .await
+        .map_err(|_| {
+            AppError::conflict(
+                "kernel_in_use",
+                "The selected kernel is unverified or reserved by its original operation",
+                request_id.0,
+            )
+        })?;
     let templates = state.templates.clone();
     let (updated, orphan_paths) = tokio::task::spawn_blocking(move || {
         templates.replace_alias(next_spec)
@@ -441,6 +456,13 @@ pub async fn get_image_install(
     Path(alias): Path<String>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<ImageInstallResponse>, AppError> {
+    if let Some(intent) = state
+        .store
+        .latest_image(&alias, firecrab_stack::NativeAction::InstallImage)
+        .map_err(|_| AppError::internal(request_id.0))?
+    {
+        return Ok(Json(super::image_mutations::snapshot(&state, &intent)));
+    }
     if TemplateRegistry::known_spec(&alias).is_none()
         && state.templates.resolve_alias(&alias).is_none()
         && local_catalog_entry(&state, &alias, request_id.0)
@@ -467,6 +489,7 @@ async fn local_catalog_entry(
     .map_err(|_| AppError::internal(request_id))
 }
 
+#[cfg(test)]
 enum ImageInstallSource {
     Known(TemplateSpec),
     Local(LocalCatalogEntry),
@@ -474,6 +497,7 @@ enum ImageInstallSource {
 
 /// `POST /api/images/{alias}/install` — extract/register an image from its
 /// already prepared local package.  It performs no network download.
+#[cfg(test)]
 pub async fn start_image_install(
     State(state): State<AppState>,
     Path(alias): Path<String>,
@@ -559,6 +583,7 @@ pub async fn start_image_install(
 /// `DELETE /api/images/{alias}` — unregister the template and remove its
 /// orphan artifact files. Refuses when VMs still use the alias or an install
 /// is running.
+#[cfg(test)]
 pub async fn delete_image(
     State(state): State<AppState>,
     Path(alias): Path<String>,
@@ -628,9 +653,16 @@ pub async fn delete_image(
 
     let templates = state.templates.clone();
     let alias_for_task = alias.clone();
-    let removed = tokio::task::spawn_blocking(move || templates.unregister_alias(&alias_for_task))
-        .await
-        .map_err(|_| AppError::internal(request_id.0))?;
+    let removed =
+        tokio::task::spawn_blocking(move || templates.unregister_alias_checked(&alias_for_task))
+            .await
+            .map_err(|_| AppError::internal(request_id.0))?
+            .map_err(|_| {
+                AppError::unavailable(
+                    "Image catalog could not be updated; original artifacts were retained",
+                    request_id.0,
+                )
+            })?;
 
     let Some((_version, orphan_paths)) = removed else {
         return Err(AppError::conflict(
@@ -842,7 +874,7 @@ mod tests {
         assert_eq!(image.boot_args, "console=ttyS0 root=/dev/vda rw custom=1");
         assert!(image.initrd.is_some());
         assert_eq!(
-            fs::read(root.join("rootfs/custom.ext4")).unwrap(),
+            fs::read(root.join(image.rootfs.relative_path())).unwrap(),
             b"custom-rootfs"
         );
     }
@@ -2051,7 +2083,8 @@ mod tests {
         assert_eq!(image.kernel_version.as_deref(), Some("7.2.2"));
         assert_eq!(image.kernel_image, "vmlinux-7.2.2-x86_64");
         assert_eq!(image.version, "demo-v1-kernel-7.2.2");
-        assert!(!old_kernel.exists());
+        assert!(old_kernel.exists());
+        assert!(state.templates.resolve_version("demo", "demo-v1").is_some());
         assert!(rootfs.exists());
         assert!(managed_kernel.exists());
         assert_eq!(

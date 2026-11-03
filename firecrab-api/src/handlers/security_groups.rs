@@ -1,6 +1,6 @@
 //! Policy CRUD serialized with VM starts and service deployment claims.
 
-use super::{micro_services::database, vms::parse_id};
+use super::{stacks::database, vms::parse_id};
 
 #[cfg(test)]
 mod tests;
@@ -175,6 +175,14 @@ pub async fn delete(
                 "security group is referenced by a service or VM",
                 request.0,
             ),
+            error @ (PersistenceError::IacResourceBusy
+            | PersistenceError::IacOwnershipConflict
+            | PersistenceError::IacParentManaged
+            | PersistenceError::StackApplyBusy
+            | PersistenceError::StackSourceBusy
+            | PersistenceError::StaleIacOwner) => {
+                crate::handlers::stacks::persistence_error(error, request.0)
+            }
             _ => AppError::internal(request.0),
         })?;
     if !deleted {
@@ -183,7 +191,7 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn ensure_idle(state: &AppState, id: Uuid, request: Uuid) -> Result<(), AppError> {
+pub(super) async fn ensure_idle(state: &AppState, id: Uuid, request: Uuid) -> Result<(), AppError> {
     let vms = state
         .vms
         .lock()
@@ -193,7 +201,13 @@ async fn ensure_idle(state: &AppState, id: Uuid, request: Uuid) -> Result<(), Ap
         .cloned()
         .collect::<Vec<_>>();
     for vm in vms {
-        if network_policy::vm_is_active(state, &vm).map_err(|_| AppError::internal(request))? {
+        if network_policy::vm_is_active(state, &vm).map_err(|_| {
+            AppError::conflict(
+                "vm_runtime_unconfirmed",
+                "Restore the VM storage mapping and verify its runtime before changing rules",
+                request,
+            )
+        })? {
             return Err(AppError::conflict(
                 "security_group_in_use",
                 "stop affected VMs before changing rules",

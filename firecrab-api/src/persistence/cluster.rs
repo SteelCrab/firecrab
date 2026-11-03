@@ -164,13 +164,17 @@ impl Store {
 
     /// Drain and admission serialize against the same database transaction.
     pub(crate) fn cluster_drain(&self, id: Uuid, draining: bool) -> Result<(), ClusterError> {
-        if self.lock().execute(
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        super::iac_cluster::public_write(&tx, "cluster_host", id)?;
+        if tx.execute(
             "UPDATE cluster_hosts SET draining=?2 WHERE id=?1",
             params![id.to_string(), draining],
         )? == 0
         {
             return Err(ClusterError::Missing);
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -297,6 +301,7 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut p = placement(&tx, id)?;
+        super::iac_cluster::public_write(&tx, "cluster_placement", id)?;
         let satisfied = match action {
             PlacementAction::Start => p
                 .observed

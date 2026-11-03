@@ -29,8 +29,26 @@ pub(super) fn register_named_image(
     templates: &TemplateRegistry,
     cache_owner: Option<&crate::persistence::Store>,
 ) -> Result<RegisteredOciImage, ResolveError> {
+    let scoped =
+        crate::image_lifecycle::publication_scope(templates, named.alias()).map_err(|_| {
+            ResolveError::Malformed("Original image publication authority changed".into())
+        })?;
+    let templates = &scoped;
     let image_root = templates.image_root_path();
-    let relative = if cache_owner.is_some() {
+    if let Some(lease) = &named.image.kernel_lease {
+        lease.check(image_root)?;
+    }
+    let retained = match templates.image_authority() {
+        Some(crate::image_lifecycle::ImageAuthority::Operation(work)) => {
+            work.check()
+                .map_err(|_| ResolveError::Malformed("Original image authority changed".into()))?;
+            Some(super::retained_import_spec(work.intent())?)
+        }
+        _ => None,
+    };
+    let relative = if let Some(spec) = &retained {
+        spec.rootfs.clone()
+    } else if cache_owner.is_some() {
         Path::new("rootfs/deploy").join(format!("{}.ext4", Uuid::new_v4()))
     } else {
         rootfs_relative(named.alias())
@@ -45,6 +63,27 @@ pub(super) fn register_named_image(
         rootfs: relative.clone(),
         boot_args: named.image().boot_args().to_owned(),
     };
+    if templates
+        .observed_images(&spec.alias)
+        .map_err(|_| ResolveError::Malformed("Original image catalog is unavailable".into()))?
+        .iter()
+        .any(|entry| entry.spec.version == spec.version)
+    {
+        let mut preview = spec.clone();
+        preview.rootfs = source
+            .strip_prefix(image_root)
+            .map_err(|_| {
+                ResolveError::Malformed("Image preparation escaped its original root".into())
+            })?
+            .to_owned();
+        let pin = templates
+            .preview_image(&preview)
+            .map_err(|_| ResolveError::Malformed("Image preparation is unverified".into()))?
+            .stack_pin();
+        templates.check_image_version(&spec, &pin).map_err(|_| {
+            ResolveError::Malformed("Original image version has different boot bytes".into())
+        })?;
+    }
     if let Some(store) = cache_owner {
         store
             .remember_deploy_image(&spec)
@@ -53,9 +92,18 @@ pub(super) fn register_named_image(
                 detail: format!("could not journal Deploy image: {error}"),
             })?;
     }
+    if let Some(crate::image_lifecycle::ImageAuthority::Operation(work)) =
+        templates.image_authority()
+    {
+        work.effects()
+            .map_err(|_| ResolveError::Malformed("Original image operation changed".into()))?;
+    }
     let published = publish_rootfs(source, &destination)?;
     if let Err(error) = templates.register_spec(spec) {
-        published.revert();
+        // The original operation retains its completed ext4 for exact recovery.
+        if retained.is_none() && templates.physical_root().is_ok() {
+            published.revert();
+        }
         return Err(ResolveError::RegisterFailed {
             alias: named.alias().to_owned(),
             detail: error.to_string(),
@@ -111,10 +159,20 @@ fn publish_rootfs(source: &Path, destination: &Path) -> Result<PublishedRootfs, 
         let _ = std::fs::remove_file(&partial);
         return Err(register_io("copy rootfs", partial, error));
     }
-    if let Err(error) = std::fs::rename(&partial, destination) {
+    if let Err(error) = std::fs::File::open(&partial).and_then(|file| file.sync_all()) {
         let _ = std::fs::remove_file(&partial);
-        let _ = std::fs::remove_file(destination);
+        return Err(register_io("sync rootfs", partial, error));
+    }
+    if let Err(error) = std::fs::hard_link(&partial, destination) {
+        let _ = std::fs::remove_file(&partial);
         return Err(register_io("publish rootfs", destination.to_owned(), error));
+    }
+    std::fs::remove_file(&partial)
+        .map_err(|error| register_io("remove rootfs staging", partial, error))?;
+    if let Some(parent) = destination.parent() {
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| register_io("sync rootfs directory", parent.to_owned(), error))?;
     }
     Ok(PublishedRootfs {
         path: destination.to_owned(),

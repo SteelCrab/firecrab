@@ -123,10 +123,13 @@ export async function createFixtureServer(root, initialRows = 100) {
     failNext: null,
     delayNext: null,
     handlers: new Map(),
+    endpointId: "6c24f092-2a11-425e-af9a-5ef742f319c6",
+    nativeOperations: new Map(),
     state: {},
     reset(rows = initialRows) {
       this.requests = [];
       this.handlers.clear();
+      this.nativeOperations.clear();
       this.failNext = null;
       this.delayNext = null;
       this.state = {
@@ -177,6 +180,34 @@ export async function createFixtureServer(root, initialRows = 100) {
       const method = req.method;
       res.setHeader("Cache-Control", "no-store");
       const send = (status, value, type = "application/json") => {
+        const operationId = req.headers["x-firecrab-operation-id"];
+        const imageTarget = path.match(
+          /^\/api\/images\/([^/]+)(?:\/(install|kernel))?$/,
+        );
+        const action =
+          path === "/api/oci/import" && method === "POST"
+            ? "import_image"
+            : imageTarget && method === "POST" && imageTarget[2] === "install"
+              ? "install_image"
+              : imageTarget && method === "PUT" && imageTarget[2] === "kernel"
+                ? "update_image_kernel"
+                : imageTarget && method === "DELETE" && !imageTarget[2]
+                  ? "delete_image"
+                  : null;
+        if (operationId && action && status >= 200 && status < 300) {
+          fixture.nativeOperations.set(operationId, {
+            operationId,
+            action,
+            state: value?.status === "running" ? "running" : "succeeded",
+            ownership: {
+              endpointId: req.headers["x-firecrab-endpoint-id"],
+              resource: {
+                kind: "image",
+                id: imageTarget?.[1] ?? value?.alias,
+              },
+            },
+          });
+        }
         if (status === 204) {
           res.writeHead(status);
           res.end();
@@ -284,6 +315,14 @@ export async function createFixtureServer(root, initialRows = 100) {
       });
       const handler = fixture.handlers.get(`${method} ${path}`);
       if (handler) return await handler({ req, res, url, body, send, fixture });
+      if (path === "/api/iac/identity" && method === "GET")
+        return send(200, { endpointId: fixture.endpointId });
+      if (method === "GET" && path.startsWith("/api/iac/native-operations/")) {
+        const operation = fixture.nativeOperations.get(path.split("/").at(-1));
+        return operation
+          ? send(200, operation)
+          : send(404, { error: { message: "Original operation not found" } });
+      }
       if (fixture.delayNext?.path === path) {
         const delay = fixture.delayNext;
         fixture.delayNext = null;

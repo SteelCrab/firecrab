@@ -16,7 +16,7 @@ base64 = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
 firecrab-api-types = { path = "../firecrab-api-types" }
-firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
+firecrab-helper-protocol = { path = "../firecrab-helper-protocol", features = ["native-transport"] }
 firecrab-stack = { path = "../firecrab-stack" }
 fs2 = "0.4"
 futures-util = "0.3"
@@ -35,8 +35,11 @@ uuid = { workspace = true, features = ["v4"] }
 reflink-copy = "0.1.30"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["user"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Registry"] }
 
 [dev-dependencies]
 socket2 = "0.6"

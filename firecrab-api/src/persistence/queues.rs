@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS application_queues (
 ) STRICT;";
 
 /// Decode a private record without exposing its contents on corruption.
-fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, PersistenceError> {
+pub(super) fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, PersistenceError> {
     serde_json::from_str(text).map_err(|_| PersistenceError::CorruptRecord {
         id: "queue".into(),
         reason: "invalid Queue record".into(),
@@ -33,7 +33,7 @@ fn decode_queue(id: &str, name: &str, text: &str) -> Result<QueueRecord, Persist
     Ok(record)
 }
 /// Serialize private records with sanitized errors.
-fn encode<T: serde::Serialize>(record: &T) -> Result<String, PersistenceError> {
+pub(super) fn encode<T: serde::Serialize>(record: &T) -> Result<String, PersistenceError> {
     serde_json::to_string(record).map_err(|_| PersistenceError::CorruptRecord {
         id: "queue".into(),
         reason: "could not serialize Queue record".into(),

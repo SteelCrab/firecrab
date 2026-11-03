@@ -71,6 +71,15 @@ async fn check(state: &AppState, record: MicroServiceDeployment) -> Result<(), A
     let Some(mut watch) = database(request, move || store.tag_watch(id)).await? else {
         return Ok(());
     };
+    let store = state.store.clone();
+    let observed_watch = watch.clone();
+    if !database(request, move || {
+        store.automatic_watch_allowed(id, &observed_watch)
+    })
+    .await?
+    {
+        return Ok(());
+    }
     if watch.status.policy.as_ref() != Some(&policy)
         || watch.status.pause == Some(AutoDeployPause::Manual)
     {
@@ -85,7 +94,7 @@ async fn check(state: &AppState, record: MicroServiceDeployment) -> Result<(), A
         return Ok(());
     }
     watch.status.next_check_at = now + i64::from(policy.interval_seconds);
-    persist(state, id, watch.clone()).await?;
+    persist(state, id, watch.clone(), watch.generation).await?;
     drop(guard);
     let observation = rules::discover(state, &policy).await;
     finish_observation(state, &record, &watch, observation, now).await
@@ -117,7 +126,7 @@ async fn finish_observation(
         return Ok(());
     }
     observe(&mut saved, &current, observation, now);
-    persist(state, id, saved.clone()).await?;
+    persist(state, id, saved.clone(), watch.generation).await?;
     drop(guard);
     if saved.pending.is_some() {
         dispatch(state, &current, saved).await?;
@@ -193,12 +202,13 @@ async fn dispatch(
     let id = record.service_id;
     let operation = pending.operation;
     let store = state.store.clone();
+    let watch_for_check = watch.clone();
     let (saved, accepted, current, allowed) = database(operation, move || {
         Ok((
             store.tag_watch(id)?,
             store.service_attempt(operation)?,
             store.service_deployment(id)?,
-            store.stack_service_auto_allowed(id)?,
+            store.automatic_watch_allowed(id, &watch_for_check)?,
         ))
     })
     .await?;
@@ -216,7 +226,7 @@ async fn dispatch(
         })
     {
         saved.status.operation_id = None;
-        return persist(state, id, saved).await;
+        return persist(state, id, saved, watch.generation).await;
     }
     saved.handled = Some(pending.digest.clone());
     saved.pause(AutoDeployPause::Failed, Some(pending.digest.clone()));
@@ -224,12 +234,20 @@ async fn dispatch(
         "Automatic Deploy could not enter the queue; check Auth, Nginx and service ownership"
             .into(),
     );
-    persist(state, id, saved).await
+    persist(state, id, saved, watch.generation).await
 }
 
-async fn persist(state: &AppState, id: Uuid, watch: Watch) -> Result<(), AppError> {
+async fn persist(
+    state: &AppState,
+    id: Uuid,
+    watch: Watch,
+    expected_generation: Uuid,
+) -> Result<(), AppError> {
     let store = state.store.clone();
-    database(id, move || store.save_tag_watch(id, &watch)).await
+    database(id, move || {
+        store.save_tag_watch_checked(id, &watch, expected_generation, false)
+    })
+    .await
 }
 
 /// The private claim cannot be supplied by an HTTP request or another Stack operation.
@@ -242,10 +260,11 @@ pub(super) async fn authorize(
 ) -> Result<(), AppError> {
     let id = previous.service_id;
     let store = state.store.clone();
+    let watch_for_check = claim.clone();
     let (saved, allowed, owned) = database(operation, move || {
         Ok((
             store.tag_watch(id)?,
-            store.stack_service_auto_allowed(id)?,
+            store.automatic_watch_allowed(id, &watch_for_check)?,
             store.service_is_controller_owned(id)?,
         ))
     })

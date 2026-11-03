@@ -1,0 +1,63 @@
+{
+  "sourceCommit": "07321c6062dbcba26880575194db774887c38557",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-03",
+  "fixture": true,
+  "scope": "Actual local Axum/SQLite/production React and architecture-valid tiny kernel fixtures. Uncertain deletion checkpoint is injected. Recovery deletes only the original unused fixture artifact and retains the separate Terraform-owned kernel. No Linux kernel compilation, guest boot, remote registry, Stack apply or Terraform provider runs.",
+  "before": {
+    "operationId": "69443880-102e-4155-b7d2-f41eb22b3389",
+    "ownership": {
+      "endpointId": "6e156fab-ccb8-4708-a02a-c9cfb8a1b1eb",
+      "resource": {
+        "kind": "kernel",
+        "id": "aarch64:7.2.13"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "delete_kernel",
+    "state": "needs_recovery",
+    "errorCode": "kernel_incomplete"
+  },
+  "after": {
+    "operationId": "69443880-102e-4155-b7d2-f41eb22b3389",
+    "ownership": {
+      "endpointId": "6e156fab-ccb8-4708-a02a-c9cfb8a1b1eb",
+      "resource": {
+        "kind": "kernel",
+        "id": "aarch64:7.2.13"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "delete_kernel",
+    "state": "succeeded",
+    "errorCode": null,
+    "executionGeneration": 1
+  },
+  "ownership": {
+    "endpointId": "6e156fab-ccb8-4708-a02a-c9cfb8a1b1eb",
+    "generation": 1,
+    "owner": {
+      "id": "da7f26e9-04ef-4a48-85bf-17a1fca804bd",
+      "key": "firecrab_kernel.retained",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "aarch64:7.2.12",
+      "kind": "kernel"
+    }
+  },
+  "retainedSha256Before": "099dccf2b0d9677f4a3aa5a59780f5e10dbfb685c700a0c3a8436018ed9f53b9",
+  "retainedSha256After": "099dccf2b0d9677f4a3aa5a59780f5e10dbfb685c700a0c3a8436018ed9f53b9",
+  "screenshots": {
+    "iac-548-kernels-desktop-2026-11-03.png": "0e0ee8c31c9d5ee7e3ed421ff252d3cee75f73172e7aba791706bc8d02d76e60",
+    "iac-548-kernels-mobile-2026-11-03.png": "f703c6b00cec9302a80787eaa2dee22564ec197a111967ad12a24973c628d781",
+    "iac-548-kernels-recovery-mobile-2026-11-03.png": "ad911e7cb4d12e3738999d4816fbe18241df6bdb192aacb3ee57009caecf1b29",
+    "iac-548-kernels-recovery-desktop-2026-11-03.png": "b382db26a48efa35acfd49aa4d7f0f77b221b565231151a0758603f517ebdf4d"
+  },
+  "artifacts": {
+    "apiTestBinarySha256": "9e117bf43aeff08699632f97de65ff5c50ac720abbd9cb9c2733e2dd75f34ac0",
+    "productionIndexSha256": "a74372c6844650d69baddc0f56eab9143ad4dafc2ec52dca756f586ce197228d"
+  }
+}

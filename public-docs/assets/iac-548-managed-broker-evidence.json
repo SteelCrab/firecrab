@@ -1,0 +1,54 @@
+{
+  "sourceCommit": "a2721b17733aac8aab90aabf4689d8325042f4a0",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-03",
+  "fixture": true,
+  "scope": "injected uncertain disconnect; seeded stopped VM and private TLS; actual local API recovery; plain fixture disk retained; no KVM, guest, image download, RabbitMQ, SQL or Terraform execution",
+  "before": {
+    "operationId": "6cda6702-8075-41e8-b5ab-c8cecda8bf7b",
+    "ownership": {
+      "endpointId": "8239ad42-ffe4-415b-a73a-88b5c2529665",
+      "resource": {
+        "kind": "database_rabbitmq",
+        "id": "default"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "disconnect_database_broker",
+    "state": "needs_recovery",
+    "errorCode": "database_broker_incomplete",
+    "configurationGeneration": 2
+  },
+  "after": {
+    "operationId": "6cda6702-8075-41e8-b5ab-c8cecda8bf7b",
+    "ownership": {
+      "endpointId": "8239ad42-ffe4-415b-a73a-88b5c2529665",
+      "resource": {
+        "kind": "database_rabbitmq",
+        "id": "default"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "disconnect_database_broker",
+    "state": "succeeded",
+    "errorCode": null,
+    "executionGeneration": 1,
+    "configurationGeneration": 2
+  },
+  "retainedBrokerId": "8bea1c8f-dd28-4ad7-a9da-a91eba03f573",
+  "retainedDiskGeneration": "bcde93f5-3b4f-499c-9dbc-68dfd59be259",
+  "diskSha256Before": "14a48c32675ffec4e7dfd56dc6174acb1b06f5b68323e2788e1994a3e875541f",
+  "diskSha256After": "14a48c32675ffec4e7dfd56dc6174acb1b06f5b68323e2788e1994a3e875541f",
+  "screenshots": {
+    "iac-548-managed-broker-desktop-2026-11-03.png": "e63ddd8ea19c276f07b3ea83fa0064f46d42d3e658f9375a3bfffb35428bf380",
+    "iac-548-managed-broker-mobile-2026-11-03.png": "d273e6a222d883ca35ba223b4d76a1132ac88e84e659ad4a8f17076428f2c804",
+    "iac-548-managed-broker-recovery-mobile-2026-11-03.png": "8736419b134b97a39da1af9650dcf2de20dafb827f684cee80fb4947c3c95729",
+    "iac-548-managed-broker-recovery-desktop-2026-11-03.png": "dd302f479c917d153d0dcb4d92e274285bcfc481d1508b96d16303f6cf56e0f4"
+  },
+  "apiTestExecutableSha256": "8de93d28a982945dce27029fc7240d7b6ee10797a1d158ba05c0a9acfe82d381",
+  "frontendIndexSha256": "cbe337fb4cef6a183ea03bb95409c50e995d1215850c75911ddf72687f31e703",
+  "apiVersion": "0.5.0 (macOS test executable; isolated local API router)",
+  "frontendVersion": "0.5.0 (production React assets)"
+}

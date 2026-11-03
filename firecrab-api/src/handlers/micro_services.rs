@@ -99,6 +99,15 @@ pub(crate) async fn update_from_stack(
     ensure_stack_writer(&state, id, operation, request_id.0).await?;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
     crate::otlp::preflight_service(&state, id, &spec, request_id.0).await?;
+    let store = state.store.clone();
+    let proposed = MicroServiceResponse {
+        id,
+        spec: spec.clone(),
+    };
+    let policy_authority = database(request_id.0, move || {
+        store.service_policy_authority(&proposed)
+    })
+    .await?;
     require_image_auth(&state, &spec.image, request_id.0).await?;
     if let Some(policy) = &spec.auto_deploy {
         crate::service_runtime::auto_deploy::validate_auth(&state, policy, request_id.0).await?;
@@ -110,7 +119,9 @@ pub(crate) async fn update_from_stack(
     let service = MicroServiceResponse { id, spec };
     let record = service.clone();
     let changed = database(request_id.0, move || {
-        state.store.update_micro_service(&record)
+        state
+            .store
+            .update_micro_service_checked(&record, &policy_authority, operation)
     })
     .await?;
     if !changed {
@@ -158,7 +169,11 @@ pub(crate) async fn delete_from_stack(
             request_id.0,
         ));
     }
-    if !database(request_id.0, move || state.store.delete_micro_service(id)).await? {
+    if !database(request_id.0, move || {
+        state.store.delete_micro_service_checked(id, operation)
+    })
+    .await?
+    {
         return Err(AppError::not_found(request_id.0));
     }
     Ok(StatusCode::NO_CONTENT)
@@ -172,6 +187,20 @@ pub(crate) async fn ensure_stack_writer(
     operation: Option<Uuid>,
     request_id: Uuid,
 ) -> Result<(), AppError> {
+    let store = state.store.clone();
+    let ownership = database(request_id, move || {
+        store.iac_resource_owner(&firecrab_stack::ManagedResource {
+            kind: "service".into(),
+            id: service.to_string(),
+        })
+    })
+    .await?;
+    if ownership
+        .owner
+        .is_some_and(|owner| owner.manager == firecrab_stack::Manager::Terraform)
+    {
+        return Err(crate::handlers::iac::managed(request_id));
+    }
     let store = state.store.clone();
     if !database(request_id, move || {
         store.stack_service_mutation_allowed(service, operation)
@@ -230,6 +259,15 @@ pub(crate) async fn database<T: Send + 'static>(
         .await
         .map_err(|_| AppError::internal(request_id))?
         .map_err(|error| match error {
+            error @ (PersistenceError::IacOwnershipConflict
+            | PersistenceError::IacParentManaged
+            | PersistenceError::IacManagedDependent
+            | PersistenceError::IacResourceBusy
+            | PersistenceError::StaleIacOwner
+            | PersistenceError::StackApplyBusy
+            | PersistenceError::StackSourceBusy) => {
+                crate::handlers::stacks::persistence_error(error, request_id)
+            }
             PersistenceError::CiDeployUnauthorized => AppError::new(
                 StatusCode::UNAUTHORIZED,
                 "deploy_token_required",

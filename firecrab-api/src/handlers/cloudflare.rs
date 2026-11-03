@@ -1,9 +1,5 @@
 //! Tokens are used only for this request; setup runs in the root helper's CLI.
-use crate::{
-    error::AppError,
-    network::{NetworkClient, NetworkError},
-    server::RequestId,
-};
+use crate::{error::AppError, network::NetworkError, server::RequestId};
 use axum::{Extension, Json, http::StatusCode};
 use firecrab_helper_protocol::cloudflare::{AccessRequest, ConnectRequest, Zone, identifier};
 use firecrab_helper_protocol::network::HelperFailure;
@@ -110,13 +106,16 @@ pub async fn zones(
 
 /// Validate onboarding input and delegate the full setup transaction to the root helper.
 pub async fn connect(
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
     Extension(request_id): Extension<RequestId>,
     Json(request): Json<ConnectRequest>,
 ) -> Result<Json<Snapshot>, AppError> {
     request
         .validate()
         .map_err(|error| invalid(error, request_id))?;
-    NetworkClient::from_env()
+    require_unmanaged(&state, request_id).await?;
+    state
+        .network
         .pipe(Operation::ConnectCloudflare { request })
         .await
         .map(Json)
@@ -142,6 +141,7 @@ pub async fn disconnect(
     axum::extract::State(state): axum::extract::State<crate::state::AppState>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<Snapshot>, AppError> {
+    require_unmanaged(&state, request_id).await?;
     state
         .network
         .pipe(Operation::DisconnectCloudflare)
@@ -155,4 +155,24 @@ pub async fn disconnect(
                 request_id.0,
             )
         })
+}
+
+/// Reject a known owned or reserved shared slot before any helper call or provider request.
+pub(super) async fn require_unmanaged(
+    state: &crate::state::AppState,
+    request_id: RequestId,
+) -> Result<(), AppError> {
+    let store = state.store.clone();
+    if !super::stacks::database(request_id.0, move || {
+        store.iac_host_kind_public_write_allowed("named_tunnel")
+    })
+    .await?
+    {
+        return Err(AppError::conflict(
+            "iac_resource_managed",
+            "named tunnel is managed; transfer or release its ownership before native changes",
+            request_id.0,
+        ));
+    }
+    Ok(())
 }

@@ -8,17 +8,22 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
+#[cfg(test)]
 use axum::http::StatusCode;
-use firecrab_api_types::{ImageInstallResponse, OciImportRequest, OciInspectResponse};
+#[cfg(test)]
+use firecrab_api_types::OciImportRequest;
+use firecrab_api_types::{ImageInstallResponse, OciInspectResponse};
 use serde::Deserialize;
 
 use crate::error::AppError;
+#[cfg(test)]
 use crate::extract::ValidatedJson;
 use crate::image_install::Architecture;
 use crate::oci::{
-    ImageReference, RegistryCredential, ResolveError, claim_template_name, is_loopback_registry,
-    resolve, run_oci_import, template_name_from_reference,
+    ImageReference, RegistryCredential, is_loopback_registry, resolve, template_name_from_reference,
 };
+#[cfg(test)]
+use crate::oci::{ResolveError, claim_template_name, run_oci_import};
 use crate::server::RequestId;
 use crate::state::AppState;
 
@@ -67,6 +72,7 @@ pub async fn inspect_oci_image(
 }
 
 /// `POST /api/oci/import` — claim the alias and start the import job.
+#[cfg(test)]
 pub async fn start_oci_import(
     State(state): State<AppState>,
     axum::Extension(request_id): axum::Extension<RequestId>,
@@ -162,8 +168,15 @@ pub(crate) async fn stored_credential_for(
 pub async fn get_oci_import(
     State(state): State<AppState>,
     Path(alias): Path<String>,
-    axum::Extension(_request_id): axum::Extension<RequestId>,
+    axum::Extension(request_id): axum::Extension<RequestId>,
 ) -> Result<Json<ImageInstallResponse>, AppError> {
+    if let Some(intent) = state
+        .store
+        .latest_image(&alias, firecrab_stack::NativeAction::ImportImage)
+        .map_err(|_| AppError::internal(request_id.0))?
+    {
+        return Ok(Json(super::image_mutations::snapshot(&state, &intent)));
+    }
     Ok(Json(state.oci_imports.snapshot(&alias)))
 }
 

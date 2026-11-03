@@ -77,175 +77,192 @@ pub(crate) async fn engine_status(
     Ok(Some(result))
 }
 
-/// Reserve one engine identity and launch serialized asynchronous provisioning.
-pub(crate) async fn create_engine(
+/// Admission and dispatch are server-owned, including time spent waiting for SQLite.
+pub(crate) async fn operate_engine(
     state: AppState,
-    spec: CreateQueueEngineRequest,
+    action: firecrab_stack::NativeAction,
+    spec: Option<CreateQueueEngineRequest>,
     id: Uuid,
+    operation_id: Uuid,
 ) -> Result<QueueEngineResponse, AppError> {
-    let guard = state
-        .queue_mutations
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| {
-            AppError::conflict(
-                "queue_engine_busy",
-                "Queue engine has an operation in progress",
-                id,
-            )
-        })?;
-    if state
-        .store
-        .queue_engine()
-        .map_err(|_| AppError::internal(id))?
-        .is_some()
-    {
-        return Err(AppError::conflict(
-            "queue_engine_exists",
-            "A Queue engine is already configured; start its existing VM",
+    tokio::spawn(async move {
+        let create = spec.map(|spec| EngineRecord {
+            vm_id: Uuid::new_v4(),
+            vm_created: false,
+            spec,
+            phase: QueueEnginePhase::Installing,
+            error: None,
+            username: "firecrab_admin".into(),
+            password: password(),
+        });
+        let store = state.store.clone();
+        let retry_create = create.clone();
+        let retry = crate::handlers::stacks::database(id, move || {
+            if store.iac_native_operation(operation_id)?.is_none() {
+                return Ok(None);
+            }
+            store
+                .begin_queue_engine_operation(operation_id, action, retry_create.as_ref())
+                .map(|(record, _, _)| Some(record))
+        })
+        .await?;
+        if let Some(record) = retry {
+            return Ok(response(&state, &record));
+        }
+        let guard = lock(&state, id)?;
+        if let Some(record) = &create {
+            let mut fields = vms::validate_create(&vm_request(&record.spec), &state);
+            fields.remove("template");
+            if !(4..=1024).contains(&record.spec.disk_gb) {
+                fields.insert("diskGb".into(), "must be between 4 and 1024 GiB".into());
+            }
+            if !fields.is_empty() {
+                return Err(AppError::validation(fields, id));
+            }
+        }
+        let store = state.store.clone();
+        let (record, operation, dispatch) = crate::handlers::stacks::database(id, move || {
+            store.begin_queue_engine_operation(operation_id, action, create.as_ref())
+        })
+        .await?;
+        let result = response(&state, &record);
+        if dispatch {
+            tokio::spawn(async move {
+                let _guard = guard;
+                run_operation(state, record, operation, id).await;
+            });
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|_| AppError::internal(id))?
+}
+
+fn lock(state: &AppState, id: Uuid) -> Result<tokio::sync::OwnedMutexGuard<()>, AppError> {
+    state.queue_mutations.clone().try_lock_owned().map_err(|_| {
+        AppError::conflict(
+            "queue_engine_busy",
+            "Queue engine has an operation in progress",
+            id,
+        )
+    })
+}
+
+/// Recovery resumes only the original durable action and retains its queue admission.
+pub(crate) async fn recover_operation(
+    state: AppState,
+    id: Uuid,
+    operation_id: Uuid,
+    expected_generation: u64,
+) -> Result<firecrab_stack::NativeOperation, AppError> {
+    tokio::spawn(async move {
+        let guard = lock(&state, id)?;
+        let store = state.store.clone();
+        let (record, operation) = crate::handlers::stacks::database(id, move || {
+            store.recover_queue_engine_operation_at(operation_id, expected_generation)
+        })
+        .await?;
+        let result = operation.clone();
+        if operation.state != firecrab_stack::NativeOperationState::Succeeded {
+            tokio::spawn(async move {
+                let _guard = guard;
+                run_operation(state, record, operation, id).await;
+            });
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|_| AppError::internal(id))?
+}
+
+async fn checkpoint(
+    state: &AppState,
+    record: &EngineRecord,
+    id: Uuid,
+    operation: &firecrab_stack::NativeOperation,
+    finished: bool,
+) -> Result<(), AppError> {
+    let store = state.store.clone();
+    let record = record.clone();
+    let operation = operation.clone();
+    crate::handlers::stacks::database(id, move || {
+        store.checkpoint_queue_engine_operation(&operation, &record, finished)
+    })
+    .await
+    .map(|_| ())
+}
+
+async fn stop(state: &AppState, record: &EngineRecord, id: Uuid) -> Result<(), AppError> {
+    let vm_state = state
+        .vms
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&record.vm_id)
+        .map(|vm| vm.state);
+    if vm_state.is_none() && record.vm_created {
+        return Err(AppError::unavailable(
+            "Queue VM is missing; retain its original disk for recovery",
             id,
         ));
     }
-    let request = vm_request(&spec);
-    let mut fields = vms::validate_create(&request, &state);
-    fields.remove("template");
-    if !(4..=1024).contains(&spec.disk_gb) {
-        fields.insert("diskGb".into(), "must be between 4 and 1024 GiB".into());
+    if vm_state.is_some_and(|phase| phase.has_live_runtime()) {
+        let _ = vms::stop_vm(
+            State(state.clone()),
+            Extension(RequestId(id)),
+            Path(record.vm_id.to_string()),
+        )
+        .await?;
     }
-    if !fields.is_empty() {
-        return Err(AppError::validation(fields, id));
+    Ok(())
+}
+
+/// Only runtime-confirmed success releases the ownership fence.
+async fn run_operation(
+    state: AppState,
+    mut record: EngineRecord,
+    operation: firecrab_stack::NativeOperation,
+    id: Uuid,
+) {
+    if checkpoint(&state, &record, id, &operation, false)
+        .await
+        .is_err()
+    {
+        return;
     }
-    let record = EngineRecord {
-        vm_id: Uuid::new_v4(),
-        vm_created: false,
-        spec,
-        phase: QueueEnginePhase::Installing,
-        error: None,
-        username: "firecrab_admin".into(),
-        password: password(),
+    let stopping = operation.action == firecrab_stack::NativeAction::StopQueueEngine;
+    let result = if stopping {
+        stop(&state, &record, id).await
+    } else {
+        provision(&state, &mut record, id, &operation).await
     };
-    state
-        .store
-        .save_queue_engine(&record)
-        .map_err(|_| AppError::internal(id))?;
-    let result = response(&state, &record);
-    tokio::spawn(async move {
-        let _guard = guard;
-        run(state, record, id).await;
-    });
-    Ok(result)
-}
-/// Recover the reserved engine identity without replacing an existing disk.
-pub(crate) async fn start_engine(
-    state: AppState,
-    id: Uuid,
-) -> Result<QueueEngineResponse, AppError> {
-    let guard = state
-        .queue_mutations
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| {
-            AppError::conflict(
-                "queue_engine_busy",
-                "Queue engine has an operation in progress",
-                id,
-            )
-        })?;
-    let mut record = state
-        .store
-        .queue_engine()
-        .map_err(|_| AppError::internal(id))?
-        .ok_or_else(|| AppError::not_found(id))?;
-    record.phase = QueueEnginePhase::Starting;
-    record.error = None;
-    state
-        .store
-        .save_queue_engine(&record)
-        .map_err(|_| AppError::internal(id))?;
-    let result = response(&state, &record);
-    tokio::spawn(async move {
-        let _guard = guard;
-        run(state, record, id).await;
-    });
-    Ok(result)
-}
-/// Stop the broker VM asynchronously while preserving its disk and declarations.
-pub(crate) async fn stop_engine(
-    state: AppState,
-    id: Uuid,
-) -> Result<QueueEngineResponse, AppError> {
-    let guard = state
-        .queue_mutations
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| {
-            AppError::conflict(
-                "queue_engine_busy",
-                "Queue engine has an operation in progress",
-                id,
-            )
-        })?;
-    let mut record = state
-        .store
-        .queue_engine()
-        .map_err(|_| AppError::internal(id))?
-        .ok_or_else(|| AppError::not_found(id))?;
-    record.phase = QueueEnginePhase::Stopping;
-    record.error = None;
-    state
-        .store
-        .save_queue_engine(&record)
-        .map_err(|_| AppError::internal(id))?;
-    let result = response(&state, &record);
-    tokio::spawn(async move {
-        let _guard = guard;
-        // Keep the exact same VM and disk; stopping never deletes messages.
-        let vm_state = state
-            .vms
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&record.vm_id)
-            .map(|v| v.state);
-        let stopped = if vm_state.is_some_and(|s| s.has_live_runtime()) {
-            vms::stop_vm(
-                State(state.clone()),
-                Extension(RequestId(id)),
-                Path(record.vm_id.to_string()),
-            )
-            .await
-            .map(|_| ())
-        } else {
-            Ok(())
-        };
-        match stopped {
-            Ok(()) => record.phase = QueueEnginePhase::Stopped,
-            Err(error) => {
-                record.phase = QueueEnginePhase::Failed;
-                record.error = Some(error.description());
-            }
-        }
-        let _ = state.store.save_queue_engine(&record);
-    });
-    Ok(result)
-}
-/// Persist the final result of one detached engine provisioning operation.
-async fn run(state: AppState, mut record: EngineRecord, id: Uuid) {
-    match provision(&state, &mut record, id).await {
+    match result {
         Ok(()) => {
-            record.phase = QueueEnginePhase::Running;
+            record.phase = if stopping {
+                QueueEnginePhase::Stopped
+            } else {
+                QueueEnginePhase::Running
+            };
             record.error = None;
         }
-        Err(error) => {
+        Err(_) => {
             record.phase = QueueEnginePhase::Failed;
-            record.error = Some(error.description());
+            record.error = Some("Queue engine operation is incomplete; recover the original operation with the retained VM and disk".into());
         }
     }
-    if state.store.save_queue_engine(&record).is_err() {
-        tracing::error!("could not save Queue engine result")
+    if checkpoint(&state, &record, id, &operation, true)
+        .await
+        .is_err()
+    {
+        tracing::error!(operation_id = %operation.operation_id, "could not commit Queue engine operation result; authority remains reserved");
     }
 }
 /// Import on first use, checkpoint ownership and start only the reserved VM.
-async fn provision(state: &AppState, record: &mut EngineRecord, id: Uuid) -> Result<(), AppError> {
+async fn provision(
+    state: &AppState,
+    record: &mut EngineRecord,
+    id: Uuid,
+    operation: &firecrab_stack::NativeOperation,
+) -> Result<(), AppError> {
     let existing = state
         .vms
         .lock()
@@ -271,10 +288,7 @@ async fn provision(state: &AppState, record: &mut EngineRecord, id: Uuid) -> Res
         }
         if state.templates.resolve_alias(TEMPLATE).is_none() {
             record.phase = QueueEnginePhase::Installing;
-            state
-                .store
-                .save_queue_engine(record)
-                .map_err(|_| AppError::internal(id))?;
+            checkpoint(state, record, id, operation, false).await?;
             state
                 .oci_imports
                 .begin_with(TEMPLATE, "Installing the internal RabbitMQ image")
@@ -307,6 +321,7 @@ async fn provision(state: &AppState, record: &mut EngineRecord, id: Uuid) -> Res
         if !fields.is_empty() {
             return Err(AppError::validation(fields, id));
         }
+        checkpoint(state, record, id, operation, false).await?;
         vms::insert_vm(
             state,
             RequestId(id),
@@ -321,10 +336,7 @@ async fn provision(state: &AppState, record: &mut EngineRecord, id: Uuid) -> Res
     // Persist ownership before RabbitMQ can accept its first message.
     record.vm_created = true;
     record.phase = QueueEnginePhase::Starting;
-    state
-        .store
-        .save_queue_engine(record)
-        .map_err(|_| AppError::internal(id))?;
+    checkpoint(state, record, id, operation, false).await?;
     if let Some(vm) = &existing
         && let Some(generation) = vm.disk_generation
         && !crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), vm.id)

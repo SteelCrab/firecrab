@@ -120,6 +120,7 @@ impl Store {
         }
         let mut s = if let Some(id) = id {
             let s = service(&tx, id)?;
+            super::iac_cluster::public_write(&tx, "cluster_service", id)?;
             if expected != Some(s.generation) {
                 return Err(ClusterError::Conflict("stale service generation".into()));
             }

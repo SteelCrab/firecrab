@@ -19,6 +19,7 @@ test("dashboard remains readable and fits desktop and phone widths", async () =>
       await expect(
         page.getByRole("heading", { name: "Images", exact: true }),
       ).toBeVisible();
+      await expect(page.locator(".panel-intro")).toBeAttached();
       const sizes = await page.evaluate(() => ({
         body: parseFloat(getComputedStyle(document.body).fontSize),
         intro: parseFloat(

@@ -64,6 +64,13 @@ pub(super) fn admit(
     deployment: &MicroServiceDeployment,
     admission: &Admission,
 ) -> Result<(), PersistenceError> {
+    super::iac_native::ensure_idle(
+        conn,
+        &firecrab_stack::ManagedResource {
+            kind: "service".into(),
+            id: deployment.service_id.to_string(),
+        },
+    )?;
     let token = token(conn, admission.token_id)?
         .ok_or(PersistenceError::CiDeployUnauthorized)?
         .metadata;
@@ -176,13 +183,52 @@ impl Store {
     }
 
     /// Enforce the per-service credential limit atomically with insertion.
+    #[cfg(test)]
     pub(crate) fn insert_deploy_token(
         &self,
         metadata: &DeployToken,
         hash: &[u8],
     ) -> Result<(), PersistenceError> {
+        let authority = self.iac_resource_owner(&firecrab_stack::ManagedResource {
+            kind: "service".into(),
+            id: metadata.service_id.to_string(),
+        })?;
+        self.insert_deploy_token_checked(metadata, hash, &authority)
+    }
+
+    /// Late issuance cannot cross a parent ownership change or resurrect a revoked verifier.
+    pub(crate) fn insert_deploy_token_checked(
+        &self,
+        metadata: &DeployToken,
+        hash: &[u8],
+        expected: &firecrab_stack::ResourceOwnership,
+    ) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if metadata.id.is_nil() || metadata.service_id.is_nil() || hash.len() != 32 {
+            return Err(PersistenceError::IacOperationIdentity);
+        }
+        let parent = firecrab_stack::ManagedResource {
+            kind: "service".into(),
+            id: metadata.service_id.to_string(),
+        };
+        if super::iac_owners::read(&tx, &parent)? != *expected {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        if !super::iac_owners::public_write_allowed(&tx, &parent)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        if !tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM micro_services WHERE id=?1)",
+            [metadata.service_id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )? {
+            return Err(PersistenceError::InvalidStackResource);
+        }
+        let retired: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM iac_native_operations WHERE kind='service_deploy_token' AND state='succeeded' AND resource_id LIKE '%:'||?1 AND json_extract(status,'$.action')='revoke_deploy_token')", [metadata.id.to_string()], |row| row.get(0))?;
+        if retired {
+            return Err(PersistenceError::IacOperationIdentity);
+        }
         let count: u32 = tx.query_row(
             "SELECT count(*) FROM service_deploy_tokens WHERE service_id=?1",
             [metadata.service_id.to_string()],
@@ -206,16 +252,14 @@ impl Store {
     }
 
     /// Delete only the exact service's verifier; repeat revocation remains harmless.
+    #[cfg(test)]
     pub(crate) fn revoke_deploy_token(
         &self,
         service: Uuid,
         token: Uuid,
     ) -> Result<(), PersistenceError> {
-        self.lock().execute(
-            "DELETE FROM service_deploy_tokens WHERE id=?1 AND service_id=?2",
-            params![token.to_string(), service.to_string()],
-        )?;
-        Ok(())
+        self.revoke_deploy_token_with_receipt(service, token, Uuid::new_v4())
+            .map(|_| ())
     }
 
     /// Compare retries against admitted inputs without depending on mutable active configuration.

@@ -1,0 +1,63 @@
+/** Actual API/React kernel recovery using explicitly injected local fixtures. */
+import assert from "node:assert/strict";
+import { access, readFile, writeFile, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { chromium, expect } from "@playwright/test";
+const [infoPath, outputPath] = process.argv.slice(2);
+if (!infoPath || !outputPath) throw new Error("Usage: capture-iac-kernels.mjs QA_INFO OUTPUT_DIRECTORY");
+const fixture = JSON.parse(await readFile(infoPath, "utf8"));
+assert.equal(fixture.fixture,true);
+const origin = new URL(fixture.url);
+assert.equal(origin.hostname,"127.0.0.1");
+const repo = fileURLToPath(new URL("../../", import.meta.url));
+const sourceCommit = execFileSync("git",["rev-parse","HEAD"],{cwd:repo,encoding:"utf8"}).trim();
+assert.equal(execFileSync("git",["status","--porcelain","--","firecrab-api","firecrab-stack","firecrab-frontend","firecrab-e2e/scripts/capture-iac-kernels.mjs"],{cwd:repo,encoding:"utf8"}).trim(),"","capture requires clean implementation and script");
+const date = process.env.FIRECRAB_IAC_QA_DATE;
+assert.match(date||"",/^\d{4}-\d{2}-\d{2}$/);
+const output = path.resolve(outputPath);
+await mkdir(output,{recursive:true});
+const hash = async(file)=>createHash("sha256").update(await readFile(file)).digest("hex");
+const retainedBefore = await hash(fixture.retainedPath);
+const browser = await chromium.launch();
+try {
+ const context = await browser.newContext({viewport:{width:1440,height:1000},locale:"en-US"});
+ const operationUrl = `${origin}api/iac/native-operations/${fixture.operationId}`;
+ async function observe() {const response=await context.request.get(operationUrl);assert.equal(response.status(),200);return response.json();}
+ const before=await observe();
+ assert.equal(before.state,"needs_recovery");
+ assert.equal(before.action,"delete_kernel");
+ const rejected=await context.request.delete(`${origin}api/kernels/7.2.12`);
+ assert.equal(rejected.status(),409);
+ const page=await context.newPage();
+ await page.addInitScript(()=>localStorage.setItem("firecrab.locale","en"));
+ await page.goto(`${origin}#/stacks`);
+ const work=page.getByRole("region",{name:"Native operations",exact:true});
+ const card=work.locator(`[data-operation-id="${fixture.operationId}"]`);
+ await expect(card.getByText("Delete kernel",{exact:true})).toBeVisible();
+ await expect(card.getByText("Needs recovery",{exact:true})).toBeVisible();
+ await expect(page.locator('[data-kind="kernel"]')).toBeVisible();
+ const files=[];
+ async function capture(name,locator){const filename=`iac-548-kernels-${name}-${date}.png`;await locator.scrollIntoViewIfNeeded();await locator.screenshot({path:path.join(output,filename)});files.push(filename);}
+ await capture("desktop",page.getByRole("main"));
+ await page.setViewportSize({width:390,height:844});
+ await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ await capture("mobile",card);
+ const recoveryResponse=page.waitForResponse(response=>response.url().endsWith(`/api/iac/native-operations/${fixture.operationId}/recover`)&&response.request().method()==="POST");
+ await card.getByRole("button",{name:"Recover original operation",exact:true}).click();
+ assert.equal((await recoveryResponse).status(),200);
+ await expect(work.getByText("Original operation completed.",{exact:true})).toBeVisible();
+ const after=await observe();
+ assert.equal(after.state,"succeeded");assert.equal(after.executionGeneration,1);
+ assert.equal(after.operationId,before.operationId);assert.deepEqual(after.ownership,before.ownership);
+ assert.equal(await hash(fixture.retainedPath),retainedBefore);
+ await assert.rejects(access(fixture.removedPath));
+ await capture("recovery-mobile",work);
+ await page.setViewportSize({width:1440,height:1000});
+ await capture("recovery-desktop",page.getByRole("main"));
+ const hashes={};for(const filename of files)hashes[filename]=await hash(path.join(output,filename));
+ await writeFile(path.join(output,"iac-548-kernels-evidence.json"),JSON.stringify({sourceCommit,sourceDirty:false,capturedOn:date,fixture:true,scope:fixture.scope,before,after,ownership:fixture.ownership,retainedSha256Before:retainedBefore,retainedSha256After:await hash(fixture.retainedPath),screenshots:hashes},null,2)+"\n");
+ console.log(JSON.stringify({sourceCommit,files,recovery:after.state,executionGeneration:after.executionGeneration}));
+} finally {await browser.close();await writeFile(infoPath.replace(/\.[^.]+$/,".stop"),"");}

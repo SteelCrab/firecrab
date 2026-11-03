@@ -5,11 +5,16 @@ pub mod bootstrap;
 pub mod builder_vm;
 pub mod console;
 pub mod console_sentinel;
+pub mod iac;
+pub(crate) mod iac_queries;
+pub(crate) mod iac_resource_plans;
+pub(crate) mod image_mutations;
 pub mod images;
 #[cfg(test)]
 #[allow(clippy::err_expect)]
 mod images_local_tests;
 pub mod info;
+pub(crate) mod kernel_mutations;
 pub mod kernels;
 pub mod micro_networks;
 pub mod micro_services;
@@ -18,6 +23,8 @@ pub mod micromanager;
 pub mod microregistry;
 pub mod network;
 pub mod oci;
+pub(crate) mod pipe_database_broker_mutations;
+pub(crate) mod pipe_database_managed_broker_mutations;
 pub mod pools;
 pub mod queues;
 pub mod registries;
@@ -30,7 +37,10 @@ pub mod stack_sources;
 pub mod stacks;
 pub mod storage;
 pub mod update;
+pub(crate) mod vm_boot;
+pub(crate) mod vm_deletion;
 pub mod vm_execution;
+pub(crate) mod vm_storage;
 pub mod vms;
 
 pub mod ai_sandbox;
@@ -39,9 +49,12 @@ pub mod pipe;
 pub mod pipe_ai;
 /// Provider authentication endpoints shared by supported Pipe services.
 pub mod pipe_auth;
+pub(crate) mod pipe_database_binding_mutations;
 pub mod pipe_database_bindings;
+pub(crate) mod pipe_database_event_mutations;
 pub mod pipe_database_events;
 pub mod pipe_database_maintenance;
+pub(crate) mod pipe_database_mutations;
 pub mod pipe_databases;
 pub mod pipe_storage;
 #[cfg(test)]

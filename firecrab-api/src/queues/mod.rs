@@ -5,7 +5,7 @@ mod disk;
 mod engine;
 pub(crate) use client::RabbitClient;
 pub(crate) use disk::prepare_engine_disk;
-pub(crate) use engine::{create_engine, engine_status, recover, start_engine, stop_engine};
+pub(crate) use engine::{engine_status, operate_engine, recover, recover_operation};
 
 use crate::{error::AppError, persistence::Store, state::AppState};
 use firecrab_api_types::*;

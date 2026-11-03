@@ -566,6 +566,7 @@ fn spawn_worker(
     mut command: Command,
 ) -> Result<ManagerResourceOperation, Error> {
     let _lock = resource::lock(home)?;
+    crate::native_host::require_unmanaged(home)?;
     let status = platform.status(home)?;
     if status
         .operation

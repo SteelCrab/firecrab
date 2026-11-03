@@ -1,0 +1,70 @@
+{
+  "sourceCommit": "8e817a6359705277dbab076aee5022d8fbb29321",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-03",
+  "fixture": true,
+  "scope": "Actual local Axum/SQLite/production React and tiny non-bootable image fixtures. Uncertain deletion is injected. Recovery removes the original unused image and preserves the separate Terraform-owned image and its shared kernel. No Linux/KVM boot, registry access, Stack apply or Terraform provider runs.",
+  "before": {
+    "operationId": "cbec6a01-64a4-40f6-9f51-b3ffe9bfc3d1",
+    "ownership": {
+      "endpointId": "a0e3fa9d-82da-4f38-a08d-bf7470a8b5b1",
+      "resource": {
+        "kind": "image",
+        "id": "unused-image"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "delete_image",
+    "state": "needs_recovery",
+    "errorCode": "image_incomplete"
+  },
+  "after": {
+    "operationId": "cbec6a01-64a4-40f6-9f51-b3ffe9bfc3d1",
+    "ownership": {
+      "endpointId": "a0e3fa9d-82da-4f38-a08d-bf7470a8b5b1",
+      "resource": {
+        "kind": "image",
+        "id": "unused-image"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "delete_image",
+    "state": "succeeded",
+    "errorCode": null,
+    "executionGeneration": 1
+  },
+  "ownership": {
+    "endpointId": "a0e3fa9d-82da-4f38-a08d-bf7470a8b5b1",
+    "generation": 1,
+    "owner": {
+      "id": "2003693d-ee56-4d1b-a4d5-7784bf48564f",
+      "key": "firecrab_image.retained",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "demo",
+      "kind": "image"
+    }
+  },
+  "retainedSha256Before": "f1757510217880fdea849f2bcb79763aa3728e15db857a6fe3a96078ac7dc07b",
+  "retainedSha256After": "f1757510217880fdea849f2bcb79763aa3728e15db857a6fe3a96078ac7dc07b",
+  "screenshots": {
+    "iac-548-images-desktop-2026-11-03.png": "c2989c52b6efedc136c479fa7578d3f1330a788834e53544e327c0b10398d05a",
+    "iac-548-images-mobile-2026-11-03.png": "78c90254c8ba11a911b928db1ae27da8964373bfdc342cc25b3dc5ccbea2607d",
+    "iac-548-images-recovery-mobile-2026-11-03.png": "31312f9416ddceaf61f54b7b9081dabd03e49408c4193558ad5860af17a4e4b7",
+    "iac-548-images-recovery-desktop-2026-11-03.png": "44015cb2d4c4b7e875ab52e685aef898cffa39e0e3a40602a481fa2b35cb6062"
+  },
+  "sharedKernelFixtureVerified": true,
+  "sharedKernelFixtureSha256": "80819147a2256a57d9b1ef38d7dd17703e5788f614c5964630de1f663b818bb3",
+  "apiTestBinarySha256": "1585b9b677c4508bfca779319975116cf97ce5375c00536204d66a9183317dc9",
+  "rustcVersion": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "hostOs": "Darwin",
+  "hostArchitecture": "arm64",
+  "frontendArtifacts": {
+    "index.html": "ffb611c13ad5af1011b77d552528c48f3db0150fdb46659dc6cf9abcd1a9be3f",
+    "assets/index-Dst_jZJv.css": "20a67c23f03c5af9e8e8edad64b203c7f8e1457e50e39c11d1bb6be0514dadfd",
+    "assets/index-DAzKZMqs.js": "efdf97b69ad8bacee17384213b835aa4f3901d05d952d98ba9e584b7ff368c01"
+  }
+}

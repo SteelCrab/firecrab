@@ -12,20 +12,36 @@ use serde::{Deserialize, Serialize};
 mod apply;
 mod inputs;
 mod lifecycle;
+mod native_operation;
+mod ownership;
 mod planning;
+mod resource_plan;
 mod source;
 pub use apply::{
     ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, StepState, desired_hash,
 };
-pub use inputs::{PlanInputs, TemplatePin, TemplateSnapshot};
+pub use inputs::{PlanInputs, SecretInputPin, TemplatePin, TemplateSnapshot};
 pub use lifecycle::{LifecyclePolicy, VmDiskIdentity};
+pub use native_operation::{
+    NativeAction, NativeOperation, NativeOperationState, NativeOperationsPage,
+};
+pub use ownership::{
+    ChangeResourceOwner, ManagedResource, Manager, OwnershipOperation, ResourceOwner,
+    ResourceOwnership, resource_kinds,
+};
 pub use planning::{
     Action, Binding, Change, DeleteStackRequest, Inventory, Plan, RegisterStackRequest,
     ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, fingerprint, plan,
 };
+pub use resource_plan::{
+    AiModelConfiguration, ApplyResourcePlan, CredentialInput, PlanResource, RESOURCE_PLAN_KINDS,
+    ResourceConfiguration, ResourcePlan, ResourcePlanAction, ResourcePlanDependency,
+    ResourcePlanReceipt, ResourceRemovalPolicy, ResourceState, SandboxAccessConfiguration,
+    SecretConfiguration, SecurityGroupConfiguration, ServiceOtlpConfiguration, UploadResourceValue,
+};
 pub use source::{
-    ConfigureGitSource, GitCheck, GitCheckState, GitCredential, GitRevision, GitSource,
-    GitSourceGeneration, GitSourceStatus, GitSyncMode, SyncGitSource,
+    ConfigureGitSource, DeleteGitSource, GitCheck, GitCheckState, GitCredential, GitRevision,
+    GitSource, GitSourceGeneration, GitSourceStatus, GitSyncMode, SyncGitSource,
 };
 
 /// Maximum UTF-8 manifest size, including comments.

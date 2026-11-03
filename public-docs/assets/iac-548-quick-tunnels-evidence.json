@@ -1,0 +1,87 @@
+{
+  "sourceCommit": "1649825e355ffc8c9075af0ba954bb333e9a8405",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-03",
+  "fixture": true,
+  "scope": "Actual local Axum/SQLite/production React and the real root CLI broker inside an isolated Linux container. A test Unix-socket proxy forwards typed helper requests to that CLI and intentionally drops one committed acknowledgement. No live systemd/Nginx, KVM guest, Stack apply, Terraform provider or remote host runs. Terraform cards represent ownership metadata.",
+  "runtimeArtifacts": {
+    "apiTestBinary": {
+      "file": "firecrab_api-8f41f84dab595347",
+      "sha256": "9ab072762287bfd8e4a6bb4db6a3b8bce96c0238bf357d2376fcd889d10f16c1"
+    },
+    "linuxCli": {
+      "file": "firecrab",
+      "sha256": "b25f9db921b6bb61c41f7a421ecdfe8487182b9e899966c33997320064ec2e2f",
+      "implementationCommit": "1649825e355ffc8c9075af0ba954bb333e9a8405",
+      "cleanSourceRebuildVerified": true
+    },
+    "transportProxy": true,
+    "systemdObservations": "Explicit fixtures; no actual systemd job executes.",
+    "productionDashboard": {
+      "index.html": "ffb611c13ad5af1011b77d552528c48f3db0150fdb46659dc6cf9abcd1a9be3f",
+      "assets/index-DAzKZMqs.js": "efdf97b69ad8bacee17384213b835aa4f3901d05d952d98ba9e584b7ff368c01",
+      "assets/index-Dst_jZJv.css": "20a67c23f03c5af9e8e8edad64b203c7f8e1457e50e39c11d1bb6be0514dadfd"
+    },
+    "externalStylesheetReferences": [
+      "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+    ],
+    "apiHostPlatform": "Darwin/arm64",
+    "rustVersion": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+  },
+  "originalRequest": {
+    "expectedEndpointId": "dc63b843-5874-44dd-867b-c055c50465ab",
+    "expectedGeneration": 1,
+    "expectedOwner": {
+      "id": "4680112d-6d08-40b4-b914-6f03ca00605a",
+      "key": "firecrab_quick_tunnel.app",
+      "manager": "terraform"
+    },
+    "operationId": "46005a68-6b2a-4e6d-8323-8d1c4b4a6ca5",
+    "owner": {
+      "id": "6087658d-95f1-40a3-8dfa-b635e83da3f5",
+      "key": "firecrab_quick_tunnel.app",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "00000000-0000-0000-0000-000000548001",
+      "kind": "quick_tunnel"
+    }
+  },
+  "recovered": {
+    "operationId": "46005a68-6b2a-4e6d-8323-8d1c4b4a6ca5",
+    "ownership": {
+      "endpointId": "dc63b843-5874-44dd-867b-c055c50465ab",
+      "resource": {
+        "kind": "quick_tunnel",
+        "id": "00000000-0000-0000-0000-000000548001"
+      },
+      "generation": 2,
+      "owner": {
+        "manager": "terraform",
+        "id": "6087658d-95f1-40a3-8dfa-b635e83da3f5",
+        "key": "firecrab_quick_tunnel.app"
+      }
+    }
+  },
+  "peerOwnership": {
+    "endpointId": "dc63b843-5874-44dd-867b-c055c50465ab",
+    "generation": 1,
+    "owner": {
+      "id": "6087658d-95f1-40a3-8dfa-b635e83da3f5",
+      "key": "firecrab_quick_tunnel.peer",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "00000000-0000-0000-0000-000000548002",
+      "kind": "quick_tunnel"
+    }
+  },
+  "manifestSha256Before": "a9d2368c889e63fb196c3cd08cb798676bec9206669cc0aadbd23bd1a7a2b578",
+  "manifestSha256After": "a9d2368c889e63fb196c3cd08cb798676bec9206669cc0aadbd23bd1a7a2b578",
+  "screenshots": {
+    "iac-548-quick-tunnels-desktop-2026-11-03.png": "a0bc56458a7d19d04e608a6a32ceeb1efde99ab95648ccee3d4769a8648f3782",
+    "iac-548-quick-tunnels-mobile-2026-11-03.png": "dd1618cea3bd0f05227305625719113f11522154a87e5193bc8b15aa731da7a4",
+    "iac-548-quick-tunnels-recovery-mobile-2026-11-03.png": "8a0bf220598ef6a01bd946a2bc942a14d6c58e14245ee7982b91def529b27dca",
+    "iac-548-quick-tunnels-recovery-desktop-2026-11-03.png": "bfe8d86ddf112c8a44a23938dcca6aad5cd66ebab86428bce4bb0b775741fccc"
+  }
+}

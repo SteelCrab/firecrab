@@ -68,44 +68,48 @@ impl Store {
     /// An already admitted VM/pool creation keeps a template Arc until its row exists.
     pub(crate) fn deploy_image_is_referenced(&self, alias: &str) -> Result<bool, PersistenceError> {
         let conn = self.lock();
-        let used: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM vms WHERE template = ?1)
+        referenced(&conn, alias)
+    }
+}
+
+pub(super) fn referenced(conn: &Connection, alias: &str) -> Result<bool, PersistenceError> {
+    let used: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM vms WHERE template = ?1)
             OR EXISTS(SELECT 1 FROM vm_pools WHERE template = ?1)",
-            [alias],
-            |row| row.get(0),
-        )?;
-        if used {
+        [alias],
+        |row| row.get(0),
+    )?;
+    if used {
+        return Ok(true);
+    }
+    let mut statement = conn.prepare(
+        "SELECT service_id, deployment FROM micro_service_deployments
+            UNION ALL SELECT service_id, deployment FROM micro_service_releases",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (id, text) = row?;
+        let deployment: MicroServiceDeployment =
+            serde_json::from_str(&text).map_err(|error| corrupt(&id, error))?;
+        if deployment_uses(&deployment, alias)? {
             return Ok(true);
         }
-        let mut statement = conn.prepare(
-            "SELECT service_id, deployment FROM micro_service_deployments
-            UNION ALL SELECT service_id, deployment FROM micro_service_releases",
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (id, text) = row?;
-            let deployment: MicroServiceDeployment =
-                serde_json::from_str(&text).map_err(|error| corrupt(&id, error))?;
-            if deployment_uses(&deployment, alias)? {
-                return Ok(true);
-            }
-        }
-        let mut statement = conn.prepare("SELECT id, spec FROM micro_services")?;
-        let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (id, text) = row?;
-            let spec: firecrab_api_types::MicroServiceSpec =
-                serde_json::from_str(&text).map_err(|error| corrupt(&id, error))?;
-            if image_alias(&spec.image, None)?.as_deref() == Some(alias) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
+    let mut statement = conn.prepare("SELECT id, spec FROM micro_services")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (id, text) = row?;
+        let spec: firecrab_api_types::MicroServiceSpec =
+            serde_json::from_str(&text).map_err(|error| corrupt(&id, error))?;
+        if image_alias(&spec.image, None)?.as_deref() == Some(alias) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn deployment_uses(

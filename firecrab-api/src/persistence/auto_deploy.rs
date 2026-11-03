@@ -20,6 +20,8 @@ pub(crate) struct Pending {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Watch {
     pub generation: Uuid,
+    #[serde(default)]
+    pub authority: Option<super::iac_auto_deploy::Authority>,
     pub status: AutoDeployStatus,
     pub handled: Option<String>,
     pub blocked: Option<String>,
@@ -32,6 +34,7 @@ impl Watch {
     pub fn new(policy: AutoDeployPolicy) -> Self {
         Self {
             generation: Uuid::new_v4(),
+            authority: None,
             status: AutoDeployStatus {
                 policy: Some(policy),
                 pause: None,
@@ -74,7 +77,14 @@ pub(super) fn read(conn: &Connection, id: Uuid) -> Result<Option<Watch>, Persist
 }
 
 pub(super) fn write(conn: &Connection, id: Uuid, watch: &Watch) -> Result<(), PersistenceError> {
-    let raw = serde_json::to_string(watch).map_err(|error| PersistenceError::CorruptRecord {
+    let mut bound = watch.clone();
+    if bound.authority.is_none() {
+        let current = super::iac_auto_deploy::authority(conn, id)?;
+        if current.has_no_history() {
+            bound.authority = Some(current);
+        }
+    }
+    let raw = serde_json::to_string(&bound).map_err(|error| PersistenceError::CorruptRecord {
         id: id.to_string(),
         reason: error.to_string(),
     })?;
@@ -93,7 +103,9 @@ pub(super) fn configuration(
             if read(conn, service.id)?
                 .is_none_or(|watch| watch.status.policy.as_ref() != Some(policy))
             {
-                write(conn, service.id, &Watch::new(policy.clone()))?;
+                let mut watch = Watch::new(policy.clone());
+                watch.authority = Some(super::iac_auto_deploy::authority(conn, service.id)?);
+                write(conn, service.id, &watch)?;
             }
         }
         None => {
@@ -128,7 +140,9 @@ pub(super) fn deployment(
                     .as_ref()
                     .is_none_or(|w| w.status.policy.as_ref() != Some(policy)) =>
             {
-                watch = Some(Watch::new(policy.clone()));
+                let mut configured = Watch::new(policy.clone());
+                configured.authority = Some(super::iac_auto_deploy::authority(conn, id)?);
+                watch = Some(configured);
             }
             _ => {}
         }
@@ -181,8 +195,19 @@ impl Store {
     }
 
     pub(crate) fn tag_watch(&self, id: Uuid) -> Result<Option<Watch>, PersistenceError> {
-        read(&self.lock(), id)
+        let conn = self.lock();
+        let mut saved = read(&conn, id)?;
+        if let Some(watch) = &mut saved
+            && watch.authority.is_none()
+        {
+            let current = super::iac_auto_deploy::authority(&conn, id)?;
+            if current.has_no_history() {
+                watch.authority = Some(current);
+            }
+        }
+        Ok(saved)
     }
+    #[cfg(test)]
     pub(crate) fn save_tag_watch(&self, id: Uuid, watch: &Watch) -> Result<(), PersistenceError> {
         write(&self.lock(), id, watch)
     }
@@ -193,9 +218,52 @@ impl Store {
         service: &firecrab_api_types::MicroServiceResponse,
         deployment: Option<&MicroServiceDeployment>,
         watch: Option<&Watch>,
+        expected: &super::iac_auto_deploy::Authority,
+        expected_watch: Option<Uuid>,
     ) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        super::iac_auto_deploy::compare(&tx, service.id, expected)?;
+        if !super::stacks::service_mutation_allowed(&tx, service.id, None)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        if read(&tx, service.id)?.map(|w| w.generation) != expected_watch {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        if super::service_observation::previous(&tx, service.id)?.is_some() != deployment.is_some()
+        {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        super::iac_auto_deploy::validate_owner(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "service_auto_deploy".into(),
+                id: service.id.to_string(),
+            },
+            false,
+        )?;
+        for kind in ["service", "service_auto_deploy"] {
+            if !super::iac_owners::public_write_allowed(
+                &tx,
+                &firecrab_stack::ManagedResource {
+                    kind: kind.into(),
+                    id: service.id.to_string(),
+                },
+            )? {
+                return Err(PersistenceError::IacOwnershipConflict);
+            }
+        }
+        let mut current: firecrab_api_types::MicroServiceSpec =
+            serde_json::from_str(&tx.query_row(
+                "SELECT spec FROM micro_services WHERE id=?1",
+                [service.id.to_string()],
+                |row| row.get::<_, String>(0),
+            )?)
+            .map_err(|_| PersistenceError::IacOperationIdentity)?;
+        current.auto_deploy = service.spec.auto_deploy.clone();
+        if current != service.spec {
+            return Err(PersistenceError::StaleIacOwner);
+        }
         tx.execute(
             "UPDATE micro_services SET spec=?2 WHERE id=?1",
             params![
@@ -209,6 +277,13 @@ impl Store {
             ],
         )?;
         if let Some(deployment) = deployment {
+            let mut fresh = super::service_observation::previous(&tx, service.id)?
+                .ok_or(PersistenceError::StaleIacOwner)?;
+            fresh.spec.auto_deploy = service.spec.auto_deploy.clone();
+            if fresh.id != deployment.id || fresh.spec != deployment.spec {
+                return Err(PersistenceError::StaleIacOwner);
+            }
+            let deployment = &fresh;
             let previous = super::service_observation::previous(&tx, service.id)?;
             super::service_observation::observe(&tx, previous.as_ref(), deployment)?;
             let raw = serde_json::to_string(deployment).map_err(|error| {

@@ -27,7 +27,7 @@ pub struct SandboxRuntimeRef {
 }
 
 /// Resource authorization is independent of model inference permission proofs.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SandboxResource {
     /// Saved project, or an explicitly reserved UUID for project creation.
@@ -70,6 +70,71 @@ pub struct SandboxResourceGrant {
 pub struct SandboxAccessPolicy {
     /// Bounded resource grants, persisted in the private server database.
     pub grants: Vec<SandboxResourceGrant>,
+}
+
+impl SandboxAccessPolicy {
+    /// Validate rights without filesystem access and canonicalize unordered grants.
+    /// Source availability is checked by the receiving API before a new admission.
+    pub fn normalize(&mut self) -> Result<(), (&'static str, &'static str)> {
+        if self.grants.len() > 256 {
+            return Err(("grants", "Use at most 256 resource grants"));
+        }
+        for grant in &mut self.grants {
+            grant.permissions.sort();
+            grant.permissions.dedup();
+            if grant.permissions.is_empty() {
+                return Err((
+                    "permissions",
+                    "A resource grant needs at least one permission",
+                ));
+            }
+            match &grant.resource {
+                SandboxResource::Source { path } => {
+                    if path.is_empty() || path.len() > 4096 || path.contains('\0') {
+                        return Err(("path", "Use the exact canonical source directory"));
+                    }
+                    if grant.permissions.iter().any(|permission| {
+                        !matches!(
+                            permission,
+                            SandboxPermission::Read | SandboxPermission::Write
+                        )
+                    }) {
+                        return Err(("permissions", "Sources support read/write grants"));
+                    }
+                }
+                SandboxResource::Project { id }
+                | SandboxResource::Connection { id }
+                | SandboxResource::Vm { id } => {
+                    if id.is_nil() {
+                        return Err(("resource", "Resource UUID cannot be nil"));
+                    }
+                    if !matches!(grant.resource, SandboxResource::Project { .. })
+                        && grant.permissions.iter().any(|permission| {
+                            !matches!(
+                                permission,
+                                SandboxPermission::Read | SandboxPermission::Execute
+                            )
+                        })
+                    {
+                        return Err((
+                            "permissions",
+                            "Connections and VMs support read/execute grants",
+                        ));
+                    }
+                }
+            }
+        }
+        self.grants
+            .sort_by(|left, right| left.resource.cmp(&right.resource));
+        if self
+            .grants
+            .windows(2)
+            .any(|pair| pair[0].resource == pair[1].resource)
+        {
+            return Err(("grants", "Use one grant per exact resource"));
+        }
+        Ok(())
+    }
 }
 
 /// User-controlled project settings. A missing source or VM permits conversation only.

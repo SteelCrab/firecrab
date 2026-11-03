@@ -1,0 +1,32 @@
+{
+  "sourceCommit": "77a530173c2741f206fc5a0ee619c2cc17332c8b",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-03",
+  "toolchain": "rustc 1.97.1",
+  "profile": "release; --locked; CARGO_INCREMENTAL=0",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "platform": "aarch64 Linux; Docker Desktop LinuxKit 7.0.14-linuxkit",
+  "execution": "unprivileged nobody user; private writable temporary working directory and FIRECRAB_IMAGE_ROOT; read-only source and compiled artifacts",
+  "results": {
+    "apiUnit": {
+      "passed": 1819,
+      "failed": 0,
+      "ignored": 25
+    },
+    "tlsStartup": {
+      "passed": 2,
+      "failed": 0
+    },
+    "vmShim": {
+      "passed": 6,
+      "failed": 0
+    }
+  },
+  "scope": "Full API release unit suite and both integration binaries, with real Linux process/filesystem/mTLS behavior and existing fixtures. Ignored live/manual tests did not run. No kernel compilation, real KVM guest, expanded Stack apply or Terraform provider acceptance is established.",
+  "artifactSha256": {
+    "apiUnit": "3a20d8f9a16e0634c09a4f999761702ca211e346e9560f094a3ad5f4e5314261",
+    "tlsStartup": "5539e1fbc850cb8b17dfae8746f31a7d1319dd61e48fa43e6d3a21a81d4f8966",
+    "vmShim": "99944449aee37c02b1da34d5dfc146348aa8b7a165ed7a0468b6c9a7ee4add0a"
+  },
+  "cleanup": "Disposable verification container exited and was removed; detached verification worktree was removed. No production resources, credentials or backups were created."
+}

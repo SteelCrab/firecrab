@@ -10,6 +10,10 @@ mod firecrab;
 mod guest;
 #[cfg(target_os = "linux")]
 pub(crate) mod host;
+#[cfg(target_os = "linux")]
+mod host_iac;
+#[cfg(any(target_os = "linux", test))]
+mod owner_ledger;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 mod quick;
 #[cfg(target_os = "linux")]
@@ -28,6 +32,10 @@ pub(crate) const TUNNEL_UNIT: &str = "firecrab-tunnel.service";
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Apply one bounded host ownership metadata request from the privileged helper.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    HostIac,
     /// Connect existing S3 buckets and manage objects through the selected host API.
     Storage {
         #[command(subcommand)]
@@ -134,6 +142,8 @@ pub enum AddressCommand {
 
 pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
+        #[cfg(target_os = "linux")]
+        Command::HostIac => host_iac::run(),
         Command::Storage { .. } => Err("Storage commands must use the selected API host".into()),
         Command::Address { command } => {
             use firecrab_helper_protocol::firecrab_tunnel::{Request, Target};

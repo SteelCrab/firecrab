@@ -12,6 +12,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub(crate) mod plan_cleanup;
 pub(crate) mod providers;
 
 /// Vault format marker, also authenticated as additional AES-GCM data.
@@ -36,6 +37,12 @@ pub(crate) enum SecretError {
     /// Another record already owns the requested name.
     #[error("a record with this name already exists")]
     Duplicate,
+    /// The local value or connection is managed by another infrastructure writer.
+    #[error("resource is managed by Terraform")]
+    IacManaged,
+    /// A native Stack or Git operation currently owns the mutation boundary.
+    #[error("resource controller operation is active")]
+    IacBusy,
     /// A captured record identity, version, or remote value has changed.
     #[error("the values changed; preview the transfer again")]
     Conflict,
@@ -251,12 +258,64 @@ pub(crate) struct Contents {
     /// Immutable Secret environments for deployments, never returned by the API.
     #[serde(default)]
     pub service_environments: BTreeMap<Uuid, BTreeMap<String, String>>,
+    /// Original Stack deployment inputs, including cleared tombstones after cleanup.
+    #[serde(default)]
+    pub stack_service_credentials:
+        BTreeMap<Uuid, crate::service_runtime::secrets::stack::StackServiceCredentials>,
     /// Version-pinned controller credentials, retained for durable cross-host retries.
     #[serde(default)]
     pub cluster_credentials: BTreeMap<String, ClusterCredentials>,
     /// Durable rotation admission/retry state; never exposed through Secrets APIs.
     #[serde(default)]
     pub service_rotations: BTreeMap<Uuid, ServiceRotation>,
+    /// Plan-bound write-only values, removed when their original effect commits.
+    #[serde(default)]
+    pub iac_plan_inputs: BTreeMap<Uuid, IacPlanInput>,
+    /// Prepared/applied effects retained until SQLite confirms their original receipt.
+    #[serde(default)]
+    pub iac_plan_executions: BTreeMap<Uuid, IacPlanExecution>,
+}
+
+/// A private input cannot be moved to another endpoint, plan, resource or owner.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IacPlanScope {
+    pub operation_id: Uuid,
+    pub plan_sha256: String,
+    pub ownership: firecrab_stack::ResourceOwnership,
+    pub owner: firecrab_stack::ResourceOwner,
+}
+
+/// Input bytes exist only in the encrypted vault and never in a public journal.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IacPlanInput {
+    pub scope: IacPlanScope,
+    pub version: u64,
+    pub value: String,
+}
+
+/// Original private value effects and their metadata acknowledgement are separate phases.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum IacPlanEffect {
+    Prepared {
+        value: Option<String>,
+        at_ms: u64,
+    },
+    Applied {
+        version: Option<u64>,
+        value_source: Option<firecrab_stack::CredentialInput>,
+        last_source: Option<firecrab_stack::CredentialInput>,
+    },
+}
+
+/// A stored applied effect recovers acknowledgement without provisioning a newer value.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IacPlanExecution {
+    pub scope: IacPlanScope,
+    pub effect: IacPlanEffect,
 }
 
 /// Private credential snapshot; values and fingerprints never enter public journals.
@@ -292,6 +351,22 @@ pub(crate) struct Vault {
     root: PathBuf,
 }
 
+/// Keep encrypted file effects and their SQLite acknowledgement under one vault lock.
+/// Contents remain private; callers explicitly commit before acknowledging metadata.
+pub(crate) struct LockedVault<'a> {
+    vault: &'a Vault,
+    key: LessSafeKey,
+    /// Decrypted data belongs only to the current exclusive file-lock scope.
+    pub(crate) contents: Contents,
+}
+
+impl LockedVault<'_> {
+    /// Durably replace the encrypted file without releasing the current lock.
+    pub(crate) fn commit(&mut self) -> Result<(), SecretError> {
+        self.vault.save(&mut self.contents, &self.key)
+    }
+}
+
 impl Vault {
     /// Records the vault directory without creating files or reading its key.
     pub(crate) fn new(root: PathBuf) -> Self {
@@ -319,13 +394,33 @@ impl Vault {
         &self,
         operation: impl FnOnce(&mut Contents) -> Result<T, SecretError>,
     ) -> Result<T, SecretError> {
+        self.exclusive(|locked| {
+            let result = operation(&mut locked.contents)?;
+            locked.commit()?;
+            Ok(result)
+        })
+    }
+
+    /// Retain the file lock across multiple durable phases and their acknowledgement.
+    /// No data is written unless the callback explicitly calls `commit`.
+    pub(crate) fn exclusive<T>(
+        &self,
+        operation: impl FnOnce(&mut LockedVault<'_>) -> Result<T, SecretError>,
+    ) -> Result<T, SecretError> {
         let (_lock, key) = self.open()?;
-        let mut contents = self.load(&key)?;
-        let result = operation(&mut contents)?;
+        let contents = self.load(&key)?;
+        operation(&mut LockedVault {
+            vault: self,
+            key,
+            contents,
+        })
+    }
+
+    fn save(&self, contents: &mut Contents, key: &LessSafeKey) -> Result<(), SecretError> {
         contents
             .plans
             .retain(|plan| now_ms().saturating_sub(plan.created_at) < 600_000);
-        let bytes = serde_json::to_vec(&contents).map_err(|_| SecretError::Storage)?;
+        let bytes = serde_json::to_vec(contents).map_err(|_| SecretError::Storage)?;
         if bytes.len() as u64 > MAX_VAULT_BYTES - 64 {
             return Err(SecretError::Invalid("PipeSecrets storage limit reached"));
         }
@@ -344,7 +439,7 @@ impl Vault {
         output.extend_from_slice(&nonce);
         output.extend(encrypted);
         atomic_write(&self.root.join("vault.bin"), &output)?;
-        Ok(result)
+        Ok(())
     }
 
     /// Acquires the vault lock and loads its key, creating a key only for a new vault.

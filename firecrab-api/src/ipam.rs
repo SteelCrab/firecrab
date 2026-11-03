@@ -230,6 +230,12 @@ impl SubnetSpec {
 /// Failure modes for allocating or releasing a network lease.
 #[derive(Debug, Error)]
 pub enum IpamError {
+    /// Native cleanup reserves this VM identity, including after acknowledged deletion.
+    #[error("VM {vm_id} is reserved or retired by native cleanup")]
+    VmUnavailable {
+        /// The VM whose identity cannot receive another lease.
+        vm_id: Uuid,
+    },
     /// A SQLite query/statement failed.
     #[error("network lease operation failed")]
     Database(#[from] rusqlite::Error),

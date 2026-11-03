@@ -10,18 +10,23 @@ mod console_resize;
 mod console_session;
 mod error;
 mod extract;
+mod file_lock;
 mod firecracker;
 mod guest_agent;
 mod guest_console;
 mod guest_ssh;
 mod handlers;
+mod host_lifecycle;
 mod host_platform;
 mod image_install;
+mod image_lifecycle;
 mod ipam;
+mod kernel_lifecycle;
 mod kernel_manager;
 mod m2image_manifest;
 mod microboot;
 mod model;
+mod native_lifecycle;
 mod network;
 mod network_policy;
 mod oci;
@@ -52,6 +57,7 @@ mod state;
 mod storage;
 mod templates;
 mod tls;
+mod vm_boot;
 mod vm_execution;
 mod vm_shim;
 
@@ -147,6 +153,12 @@ async fn run() -> Result<(), StartupError> {
         .await
         .map_err(StartupError::Persistence)?;
     state.cluster = std::sync::Arc::new(cluster);
+    state.native_host = native_lifecycle::configured_client(&state.store)
+        .map_err(StartupError::Tls)?
+        .map(std::sync::Arc::new);
+    state.native_configuration = native_lifecycle::configured_configuration_client(&state.store)
+        .map_err(StartupError::Tls)?
+        .map(std::sync::Arc::new);
     // Reject a second owner before recovering any host or scheduled work.
     let scheduler_ownership = state
         .store
@@ -156,6 +168,7 @@ async fn run() -> Result<(), StartupError> {
     tokio::task::spawn_blocking(move || {
         store.interrupt_sandbox_tasks()?;
         store.interrupt_stack_applies()?;
+        store.interrupt_native_iac_operations()?;
         store.interrupt_stack_checks(stack_source::now())
     })
     .await
@@ -184,6 +197,7 @@ async fn run() -> Result<(), StartupError> {
     service_runtime::recovery::start(state.clone());
     service_runtime::deploy::rotation::start(state.clone());
     service_runtime::auto_deploy::start(state.clone());
+    secrets::plan_cleanup::start(state.clone());
     // Fetch the shared bootstrap builder source now, in the background, so
     // the request that needs it doesn't have to — see spawn_warmup.
     microboot::spawn_warmup(state.clone());

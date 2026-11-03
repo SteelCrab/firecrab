@@ -1,10 +1,11 @@
 import PipeServiceMenu from "./PipeServiceMenu";
 import EditableDatabase from "./EditableDatabase";
-import { fetchJson } from "../api/client";
+import { NativeMutationPending } from "../api/nativeMutations";
 import DatabaseOperations from "./DatabaseOperations";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   createPipeDatabase,
+  changePipeDatabaseAccess,
   updatePipeDatabase,
   deletePipeDatabase,
   getDatabaseTables,
@@ -31,6 +32,14 @@ const providers: Record<DatabaseProvider, string> = {
 
 export default function PipeDatabases({ onUnsavedChange }: Props) {
   const { t } = useI18n();
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const [pendingWork, setPendingWork] = useState(false);
   const [connections, setConnections] = useState<PipeDatabase[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadRevision, setLoadRevision] = useState(0);
@@ -108,16 +117,40 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
     setError(null);
     setNotice(null);
     try {
-      const saved = editing
+      const result = editing
         ? await updatePipeDatabase(editing.id, input())
         : await createPipeDatabase(input());
+      if (!mounted.current) return;
+      const saved = result.value;
+      if (!saved) {
+        closeEditor();
+        setLoadRevision((value) => value + 1);
+        setNotice(
+          t(
+            "The original request completed. Its connection is not in the current list.",
+            "원래 요청을 완료했다. 현재 목록에 해당 연결이 없다.",
+          ),
+        );
+        result.acknowledge();
+        return;
+      }
+      setPendingWork(false);
+      if (result.recovered)
+        setNotice(
+          t(
+            "The original request completed. Review the saved connection before making further changes.",
+            "원래 요청을 완료했다. 다음 변경 전에 저장된 연결을 확인한다.",
+          ),
+        );
       setConnections((current) => [
         ...(current ?? []).filter((row) => row.id !== saved.id),
         saved,
       ]);
       setBrowsing((current) => (current?.id === saved.id ? saved : current));
       closeEditor();
+      result.acknowledge();
     } catch (failure) {
+      setPendingWork(failure instanceof NativeMutationPending);
       setError((failure as Error).message);
     } finally {
       setBusy(false);
@@ -182,14 +215,31 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const updated = await fetchJson<PipeDatabase>(
-        `/api/pipe/databases/${encodeURIComponent(connection.id)}/access`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ writeEnabled: !connection.writeEnabled }),
-        },
+      const result = await changePipeDatabaseAccess(
+        connection.id,
+        !connection.writeEnabled,
       );
+      if (!mounted.current) return;
+      const updated = result.value;
+      if (!updated) {
+        setLoadRevision((value) => value + 1);
+        setNotice(
+          t(
+            "The original request completed. Its connection is not in the current list.",
+            "원래 요청을 완료했다. 현재 목록에 해당 연결이 없다.",
+          ),
+        );
+        result.acknowledge();
+        return;
+      }
+      setPendingWork(false);
+      if (result.recovered)
+        setNotice(
+          t(
+            "The original request completed. Review the saved connection before making further changes.",
+            "원래 요청을 완료했다. 다음 변경 전에 저장된 연결을 확인한다.",
+          ),
+        );
       setConnections(
         (rows) =>
           rows?.map((row) => (row.id === updated.id ? updated : row)) || [],
@@ -198,7 +248,9 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
         current?.id === updated.id ? updated : current,
       );
       setPreview(null);
+      result.acknowledge();
     } catch (e) {
+      setPendingWork(e instanceof NativeMutationPending);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -275,6 +327,13 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
       {error && (
         <div className="banner error" role="alert">
           {error}
+          {pendingWork && (
+            <p>
+              <a href="#/stacks">
+                {t("Review original operation", "원래 작업 확인")}
+              </a>
+            </p>
+          )}
         </div>
       )}
       {notice && (

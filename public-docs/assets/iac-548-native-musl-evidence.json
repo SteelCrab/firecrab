@@ -1,0 +1,54 @@
+{
+  "sourceCommit": "09715b7ff648be848112a6d186581b389ed3aff2",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-03",
+  "platform": "linux/arm64",
+  "rustVersion": "1.97.1",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "results": {
+    "gnuPhysicalDirectory": {
+      "passed": 1,
+      "failed": 0
+    },
+    "muslPhysicalDirectory": {
+      "passed": 1,
+      "failed": 0
+    },
+    "rootCliFixture": {
+      "kind": "privileged-native-maintenance-fixture",
+      "passed": true,
+      "nativePlatform": "linux",
+      "originalOperation": "a50c933f-83e3-4fc5-abc1-3ee7f08f00d0",
+      "publicServiceControlGuarded": true,
+      "hostConfigurationOwnership": true,
+      "standaloneInstallerFenced": true,
+      "installerParentScopeChecked": true,
+      "nativeMtls": true,
+      "wrongApiPrincipalRejected": true,
+      "liveSystemd": false,
+      "guestBoot": false,
+      "stackExecution": false,
+      "terraformExecution": false
+    },
+    "strictLinuxClippy": true
+  },
+  "cliSha256": "7e006d817dd2d24493187db2e461d90bbeea09707bd4c5488f9ba230a7bdd55b",
+  "artifacts": [
+    {
+      "file": "/build/target/release/deps/firecrab_helper_protocol-15865a0388f66994",
+      "sha256": "4872aaa63f630adf5590dfa6bbc3f4b6dbde0d0761094aa347aa9a318c6ec282"
+    },
+    {
+      "file": "/build/native-musl-target/aarch64-unknown-linux-musl/release/deps/firecrab_helper_protocol-9bbcac4ed1b5dbb8",
+      "sha256": "1d58d87372aa1336dc1f39655668b40cb5e8cf972c42d96d6c5dc1617ed9d132"
+    }
+  ],
+  "logs": {
+    "native-cli-build.log": "1a3d3eb2959398acd459f14d8f9b0edc55b7bf40f4cf52c2596abb6921967b3a",
+    "native-gnu-physical-tests.log": "5c7ba74ca105b14a61d3fbfd43dfb1cb50e60540b7f322f5df2cfe9e23e39ea4",
+    "native-musl-physical-tests.log": "9bfdba06a8c0e1bc2e35b635e898215d329985bdc375c7d1a1396e7ccf1f6087",
+    "native-cli-clippy.log": "adc42a1ced037fdc0551602dcddce79e46982f521096b669d21be9ec4942228f",
+    "native-cli-runtime-tests.log": "17aaec0b2f52ca623c4bdca8c7826b101e851814a1de366a36cd164cd159551c"
+  },
+  "scope": "Actual GNU and musl protocol test executables plus actual root CLI/native mTLS/standalone installer guard in private temporary directories. Verifies matching --bin-dir authorization after installed CLI removal. Systemctl is simulated; no live systemd, guest boot, Stack apply or Terraform execution."
+}

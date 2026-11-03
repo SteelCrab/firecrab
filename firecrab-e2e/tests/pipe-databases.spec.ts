@@ -7,6 +7,7 @@ import type {
 } from "./support/database-types";
 
 const id = "11111111-1111-4111-8111-111111111111";
+const endpointId = "876c718d-0bec-48d9-92ea-4e021abf418e";
 const saved: PipeDatabase = {
   id,
   name: "Application DB",
@@ -59,6 +60,8 @@ async function open(page: Page, options: Options = {}) {
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
+    if (path === "/api/iac/identity")
+      return route.fulfill({ json: { endpointId } });
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/update")
       return route.fulfill({
@@ -909,6 +912,7 @@ async function openWritable(page: Page, failure?: "unknown" | "conflict") {
     rabbitmq: unknown[] = [],
     acknowledgements: unknown[] = [];
   const serviceId = "22222222-2222-4222-8222-222222222222";
+  const nativeOperations = new Map<string, object>();
   let configured = false;
   const columns = [
     {
@@ -942,6 +946,16 @@ async function openWritable(page: Page, failure?: "unknown" | "conflict") {
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
     const path = new URL(route.request().url()).pathname,
       method = route.request().method();
+    if (path === "/api/iac/identity")
+      return route.fulfill({ json: { endpointId } });
+    if (path.startsWith("/api/iac/native-operations/")) {
+      const operation = nativeOperations.get(path.split("/").at(-1)!);
+      return route.fulfill(
+        operation
+          ? { json: operation }
+          : { status: 404, json: { error: { message: "Unknown operation" } } },
+      );
+    }
     const input = () => route.request().postDataJSON();
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/update")
@@ -1068,6 +1082,18 @@ async function openWritable(page: Page, failure?: "unknown" | "conflict") {
       if (method === "POST") {
         rabbitmq.push(input());
         configured = true;
+        const operationId = route.request().headers()[
+          "x-firecrab-operation-id"
+        ];
+        nativeOperations.set(operationId, {
+          operationId,
+          action: "prepare_database_broker",
+          state: "succeeded",
+          ownership: {
+            endpointId,
+            resource: { kind: "database_rabbitmq", id: "default" },
+          },
+        });
       }
       return route.fulfill({
         json: configured ? { phase: "ready", development: false } : null,

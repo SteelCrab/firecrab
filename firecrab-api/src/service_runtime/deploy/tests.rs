@@ -159,6 +159,7 @@ pub(in crate::service_runtime) async fn helper(
             let _ = write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result,
@@ -793,6 +794,13 @@ async fn failed_candidate_restores_healthy_previous_without_registry_or_image_ca
     state.vms.lock().unwrap().insert(vm.id, vm);
     let old = (*record.update.as_ref().unwrap().previous).clone();
     let operation = record.id;
+    state
+        .store
+        .insert_micro_service(&firecrab_api_types::MicroServiceResponse {
+            id: old.service_id,
+            spec: old.spec.clone(),
+        })
+        .unwrap();
     state.store.save_service_deployment(&old).unwrap();
     state.store.save_service_deployment(&record).unwrap();
     let helper = helper(root.path(), &record).await;
@@ -899,7 +907,14 @@ async fn cancelled_http_waiter_does_not_cancel_committed_stop_or_lose_ownership(
     let service = record.service_id;
     let claim = state.service_mutations.clone().lock_owned().await;
     {
-        let mut future = std::pin::pin!(submit(state.clone(), record, claim, Uuid::new_v4(), None));
+        let mut future = std::pin::pin!(submit(
+            state.clone(),
+            record,
+            claim,
+            Uuid::new_v4(),
+            None,
+            None
+        ));
         // One poll starts the independently owned commit/dispatch task.
         assert!(
             std::future::poll_fn(|context| std::task::Poll::Ready(future.as_mut().poll(context)))

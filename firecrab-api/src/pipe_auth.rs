@@ -207,14 +207,14 @@ impl SavedAuth {
                 account_id,
                 credentials,
             } => {
-                validate_aws(credentials)?;
                 let host = ecr_api_host(&credentials.region);
-                let credential =
-                    ecr_credential(&client()?, credentials, &format!("https://{host}/")).await?;
-                if credential.registry != ecr_registry(account_id, &credentials.region) {
-                    return Err("AWS account changed. Reconnect AWS in Auth.");
-                }
-                Ok(credential)
+                ecr_account_credential(
+                    &client()?,
+                    credentials,
+                    account_id,
+                    &format!("https://{host}/"),
+                )
+                .await
             }
         }
     }
@@ -603,6 +603,21 @@ async fn ecr_credential(
         username: "AWS".into(),
         secret: secret.into(),
     })
+}
+
+/// Refresh a retained signing source only within its original verified account.
+async fn ecr_account_credential(
+    client: &Client,
+    credentials: &AwsCredentials,
+    account: &str,
+    endpoint: &str,
+) -> Result<RegistryCredential, &'static str> {
+    validate_aws(credentials)?;
+    let login = ecr_credential(client, credentials, endpoint).await?;
+    if login.registry != ecr_registry(account, &credentials.region) {
+        return Err("AWS account changed. Reconnect AWS in Auth.");
+    }
+    Ok(login)
 }
 
 /// Signed metadata requests use the same AWS account and region as the registry login.
@@ -995,6 +1010,49 @@ mod tests {
             task.abort();
         }
     }
+    #[tokio::test]
+    async fn ecr_account_refresh_retains_original_signer_and_rejects_another_account() {
+        let credentials = aws();
+        for (account, password, succeeds) in [
+            ("123456789012", "original-login", true),
+            ("123456789012", "renewed-login", true),
+            ("999999999999", "foreign-login", false),
+        ] {
+            let body = serde_json::json!({"authorizationData":[{
+                "authorizationToken":STANDARD.encode(format!("AWS:{password}")),
+                "proxyEndpoint":format!("https://{account}.dkr.ecr.ap-northeast-2.amazonaws.com")
+            }]})
+            .to_string();
+            let (url, task, received) = fixture(StatusCode::OK, "", body).await;
+            let login =
+                ecr_account_credential(&Client::new(), &credentials, "123456789012", &url).await;
+            let headers = received.await.unwrap().0;
+            assert!(
+                headers["authorization"]
+                    .to_str()
+                    .unwrap()
+                    .contains(&credentials.access_key_id)
+            );
+            assert_eq!(headers["x-amz-security-token"], credentials.session_token);
+            assert_eq!(login.is_ok(), succeeds);
+            match login {
+                Ok(login) => assert_eq!(login.secret, password),
+                Err(error) => assert!(
+                    !error.contains(password) && !error.contains(&credentials.secret_access_key)
+                ),
+            }
+            task.abort();
+        }
+        let (url, task, _) =
+            fixture(StatusCode::UNAUTHORIZED, "", "private-upstream-body".into()).await;
+        let error = ecr_account_credential(&Client::new(), &credentials, "123456789012", &url)
+            .await
+            .err()
+            .unwrap();
+        assert!(!error.contains("private-upstream-body"));
+        task.abort();
+    }
+
     #[tokio::test]
     async fn ecr_catalog_signs_pagination_and_rejects_foreign_repositories() {
         let body = serde_json::json!({ "repositories": [{ "registryId": "123456789012", "repositoryName": "team/app" }], "nextToken": "opaque+/=cursor" }).to_string();

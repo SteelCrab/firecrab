@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { fetchJson } from "../api/client";
+import { nativeMutation, NativeMutationPending } from "../api/nativeMutations";
 import type { PipeDatabase, DatabaseTable } from "../api/pipeDatabases";
 import { useI18n } from "../i18n";
 
@@ -9,16 +10,19 @@ type Binding = {
   serviceId: string;
   access: string;
   ready: boolean;
+  envName?: string;
 };
 type Trigger = {
   id: string;
   schema: string;
   table: string;
   serviceId: string;
-  pending: number;
-  failed: number;
-  delivered: number;
-  skipped: number;
+  pending?: number;
+  failed?: number;
+  delivered?: number;
+  skipped?: number;
+  installed?: boolean;
+  path?: string;
   paused: boolean;
   detached: boolean;
   lastError: string | null;
@@ -52,6 +56,15 @@ export default function DatabaseOperations({
   tables: DatabaseTable[];
 }) {
   const { t } = useI18n();
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const [notice, setNotice] = useState("");
+  const [pendingWork, setPendingWork] = useState(false);
   const base = `/api/pipe/databases/${enc(database.id)}`;
   const [open, setOpen] = useState(false),
     [maintenance, setMaintenance] = useState(false),
@@ -133,18 +146,147 @@ export default function DatabaseOperations({
     url: string,
     body?: object,
     identity = false,
+    fixedResourceId?: string,
   ) => {
     if (busy) return;
+    const bindingCreate = method === "POST" && url === `${base}/bindings`;
+    const bindingDelete =
+      method === "DELETE" && url.startsWith("/api/pipe/database-bindings/");
+    const eventCreate = method === "POST" && url === `${base}/triggers`;
+    const eventMatch =
+      /^\/api\/pipe\/database-triggers\/([^/]+)(\/detach)?$/.exec(url);
+    const eventAction = eventCreate
+      ? "create_database_events"
+      : eventMatch
+        ? method === "PUT" && !eventMatch[2]
+          ? "pause_database_events"
+          : method === "POST" && eventMatch[2]
+            ? "detach_database_events"
+            : method === "DELETE" && !eventMatch[2]
+              ? "delete_database_events"
+              : null
+        : null;
+    const nativeEvent = eventAction !== null;
+    const nativeBinding = bindingCreate || bindingDelete;
+    const managedPrepare =
+      method === "POST" && url === "/api/pipe/database-rabbitmq/managed";
+    const nativeConfiguration = nativeBinding || nativeEvent || managedPrepare;
     const key = JSON.stringify({ method, url, body });
-    if (identity && (!pending.current || pending.current.key !== key))
+    if (
+      identity &&
+      !nativeConfiguration &&
+      (!pending.current || pending.current.key !== key)
+    )
       pending.current = { key, id: crypto.randomUUID() };
-    const payload = identity
-      ? { ...body, requestId: pending.current!.id }
-      : body;
+    const payload =
+      identity && !nativeConfiguration
+        ? { ...body, requestId: pending.current!.id }
+        : body;
     setBusy(true);
     setError("");
+    setNotice("");
     try {
-      await fetchJson(url, write(method, payload));
+      if (nativeConfiguration) {
+        const deleting =
+          bindingDelete || eventAction === "delete_database_events";
+        const creating = bindingCreate || eventCreate;
+        const id = bindingDelete
+          ? decodeURIComponent(url.slice("/api/pipe/database-bindings/".length))
+          : eventMatch
+            ? decodeURIComponent(eventMatch[1])
+            : undefined;
+        const kind = managedPrepare
+          ? "database_rabbitmq"
+          : nativeEvent
+            ? "database_events"
+            : "database_binding";
+        const action = managedPrepare
+          ? "prepare_database_broker"
+          : (eventAction ??
+            (bindingCreate
+              ? "create_database_binding"
+              : "delete_database_binding"));
+        const expected = nativeEvent
+          ? creating
+            ? (operationId: string) =>
+                `${database.id}:${fixedResourceId ?? operationId}`
+            : `${database.id}:${id}`
+          : (fixedResourceId ?? id);
+        const result = await nativeMutation<
+          Binding | Trigger | Managed | { deleted: boolean }
+        >(
+          method,
+          url,
+          creating
+            ? (requestId: string) => ({
+                ...body,
+                requestId: fixedResourceId ?? requestId,
+              })
+            : body,
+          action,
+          kind,
+          async (resource) => {
+            if (managedPrepare)
+              return fetchJson<Managed>("/api/pipe/database-rabbitmq/managed");
+            if (deleting) return { deleted: true };
+            const child = nativeEvent
+              ? resource.slice(resource.indexOf(":") + 1)
+              : resource;
+            return (
+              (
+                await fetchJson<(Binding | Trigger)[]>(
+                  `${base}/${nativeEvent ? "triggers" : "bindings"}`,
+                )
+              ).find((item) => item.id === child) ?? null
+            );
+          },
+          managedPrepare
+            ? { id: "default", waitForCompletion: true }
+            : expected,
+        );
+        if (!mounted.current) return;
+        if (managedPrepare && result.value) setManaged(result.value as Managed);
+        if (!managedPrepare && result.value && "id" in result.value) {
+          if (nativeEvent) {
+            const saved = result.value as Trigger;
+            setTriggers((current) => [
+              ...current.filter((item) => item.id !== saved.id),
+              { ...current.find((item) => item.id === saved.id), ...saved },
+            ]);
+          } else {
+            const saved = result.value as Binding;
+            setBindings((current) => [
+              ...current.filter((item) => item.id !== saved.id),
+              saved,
+            ]);
+          }
+        }
+        if (deleting) {
+          if (nativeEvent)
+            setTriggers((current) => current.filter((item) => item.id !== id));
+          else
+            setBindings((current) => current.filter((item) => item.id !== id));
+        }
+        if (result.recovered)
+          setNotice(
+            managedPrepare
+              ? t(
+                  "The original request completed. Review broker configuration before making further changes.",
+                  "원래 요청을 완료했다. 다음 변경 전에 브로커 설정을 확인한다.",
+                )
+              : nativeEvent
+                ? t(
+                    "The original request completed. Review event configuration before making further changes.",
+                    "원래 요청을 완료했다. 다음 변경 전에 이벤트 설정을 확인한다.",
+                  )
+                : t(
+                    "The original request completed. Review service access before making further changes.",
+                    "원래 요청을 완료했다. 다음 변경 전에 서비스 접근을 확인한다.",
+                  ),
+          );
+        setPendingWork(false);
+        result.acknowledge();
+      } else await fetchJson(url, write(method, payload));
       pending.current = null;
       try {
         await load();
@@ -152,6 +294,7 @@ export default function DatabaseOperations({
         setPollError(e instanceof Error ? e.message : String(e));
       }
     } catch (e) {
+      setPendingWork(e instanceof NativeMutationPending);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -162,10 +305,12 @@ export default function DatabaseOperations({
     if (busy) return;
     setBusy(true);
     setError("");
+    setNotice("");
     try {
-      await fetchJson(
+      const result = await nativeMutation<{ configured: boolean }>(
+        "PUT",
         "/api/pipe/database-rabbitmq",
-        write("PUT", {
+        {
           brokers: brokers
             .split(/[,\n]/)
             .map((v) => v.trim())
@@ -178,8 +323,22 @@ export default function DatabaseOperations({
           ...(ca.trim() ? { caCertificate: ca.trim() } : {}),
           ...(cert.trim() ? { clientCertificate: cert.trim() } : {}),
           ...(clientKey.trim() ? { clientKey: clientKey.trim() } : {}),
-        }),
+        },
+        "configure_database_broker",
+        "database_rabbitmq",
+        async () => ({ configured: true }),
+        "default",
       );
+      if (!mounted.current) return;
+      if (result.recovered)
+        setNotice(
+          t(
+            "The original request completed. Review broker configuration before making further changes.",
+            "원래 요청을 완료했다. 다음 변경 전에 브로커 설정을 확인한다.",
+          ),
+        );
+      setPendingWork(false);
+      result.acknowledge();
       setPassword("");
       setClientKey("");
       setExternal(false);
@@ -189,6 +348,7 @@ export default function DatabaseOperations({
         setPollError(String(e));
       }
     } catch (e) {
+      setPendingWork(e instanceof NativeMutationPending);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -257,7 +417,20 @@ export default function DatabaseOperations({
   return (
     <section className="panel">
       <h3>{t("Database operations", "DB 작업")}</h3>
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <p role="alert">
+          {error}
+          {pendingWork && (
+            <>
+              {" "}
+              <a href="#/stacks">
+                {t("Review original operation", "원래 작업 확인")}
+              </a>
+            </>
+          )}
+        </p>
+      )}
+      {notice && <p role="status">{notice}</p>}
       {pollError && <p role="alert">{pollError}</p>}
       <button type="button" className="btn" onClick={() => setOpen((v) => !v)}>
         {t("Service access and events", "서비스 접근과 이벤트")}
@@ -284,6 +457,28 @@ export default function DatabaseOperations({
                 item.serviceId}{" "}
               · {item.access} ·{" "}
               {item.ready ? t("Ready", "준비됨") : t("Pending", "대기")}{" "}
+              {!item.ready && (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy}
+                  onClick={() =>
+                    void act(
+                      "POST",
+                      `${base}/bindings`,
+                      {
+                        serviceId: item.serviceId,
+                        access: item.access,
+                        envName: item.envName ?? "DATABASE_URL",
+                      },
+                      true,
+                      item.id,
+                    )
+                  }
+                >
+                  {t("Retry setup", "설정 재시도")}
+                </button>
+              )}{" "}
               <button
                 className="btn danger"
                 disabled={busy}
@@ -438,11 +633,35 @@ export default function DatabaseOperations({
             <article key={item.id}>
               <p>
                 {item.schema}.{item.table} → {item.serviceId} ·{" "}
-                {t("Pending", "대기")} {item.pending} · {t("Failed", "실패")}{" "}
-                {item.failed} · {t("Delivered", "전달")} {item.delivered} ·{" "}
-                {t("Skipped", "건너뜀")} {item.skipped}
+                {t("Pending", "대기")} {item.pending ?? "—"} ·{" "}
+                {t("Failed", "실패")} {item.failed ?? "—"} ·{" "}
+                {t("Delivered", "전달")} {item.delivered ?? "—"} ·{" "}
+                {t("Skipped", "건너뜀")} {item.skipped ?? "—"}
               </p>
               {item.lastError && <p role="alert">{item.lastError}</p>}
+              {item.installed === false && !item.detached && (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy}
+                  onClick={() =>
+                    void act(
+                      "POST",
+                      `${base}/triggers`,
+                      {
+                        schema: item.schema,
+                        table: item.table,
+                        serviceId: item.serviceId,
+                        path: item.path ?? "/events/database",
+                      },
+                      true,
+                      item.id,
+                    )
+                  }
+                >
+                  {t("Retry event setup", "이벤트 설정 재시도")}
+                </button>
+              )}
               <button
                 className="btn"
                 disabled={busy}
@@ -460,7 +679,11 @@ export default function DatabaseOperations({
                 className="btn"
                 disabled={
                   busy ||
-                  (item.detached && (item.pending > 0 || item.failed > 0))
+                  (item.detached &&
+                    (item.pending === undefined ||
+                      item.failed === undefined ||
+                      item.pending > 0 ||
+                      item.failed > 0))
                 }
                 onClick={() => {
                   if (

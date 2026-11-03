@@ -1,0 +1,195 @@
+{
+  "sourceCommit": "2b1fdce65e646ae087779422a4e52910bc14cd03",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-03",
+  "scope": "Actual production API/SQLite/React and actual root Linux native filesystem/mTLS server in one temporary container. An explicit TLS relay forwards unaltered messages and drops one actual committed acknowledgement. Systemd observations are simulated. No live systemd job, guest, Stack apply or Terraform provider execution. The overlay is verification evidence, not product UI.",
+  "initial": {
+    "runtimeArtifacts": {
+      "api": {
+        "sha256": "550e1cfa9f0657735cc03c8bb8e39cbe3f03dc585807c980b0a5cf1e701ae98f",
+        "sourceCommit": "2b1fdce65e646ae087779422a4e52910bc14cd03"
+      },
+      "nativeCli": {
+        "sha256": "bcfe2173fec224562c635bd8816e49c303e9e0b7683d1df836673caf38d72c45",
+        "sourceCommit": "52f3eacaca932dbc5aec111110abdec4721bdf5b"
+      }
+    },
+    "phase": "Owned",
+    "endpointId": "f221a5c1-be97-4273-bf89-71908cfd6cc8",
+    "installationId": "5f27a7ff-a493-82aa-babd-de99772703c0",
+    "transferOperationId": "a26c27d4-5093-44b6-ab64-cb7e4f7028b9",
+    "nativeGeneration": 1,
+    "apiGeneration": 1,
+    "peerGeneration": 1,
+    "configurationSha256": "b23296ece53ded8d51e98ccbfd9ec54c208f47684b75fe6672f3bc6a991a7adb",
+    "nativeMtls": true,
+    "systemd": "Simulated observation; no systemd jobs",
+    "workflowScope": "Ownership prerequisites; Stack/Terraform execution remains pending"
+  },
+  "lost": {
+    "runtimeArtifacts": {
+      "api": {
+        "sha256": "550e1cfa9f0657735cc03c8bb8e39cbe3f03dc585807c980b0a5cf1e701ae98f",
+        "sourceCommit": "2b1fdce65e646ae087779422a4e52910bc14cd03"
+      },
+      "nativeCli": {
+        "sha256": "bcfe2173fec224562c635bd8816e49c303e9e0b7683d1df836673caf38d72c45",
+        "sourceCommit": "52f3eacaca932dbc5aec111110abdec4721bdf5b"
+      }
+    },
+    "phase": "Acknowledgement lost",
+    "endpointId": "f221a5c1-be97-4273-bf89-71908cfd6cc8",
+    "installationId": "5f27a7ff-a493-82aa-babd-de99772703c0",
+    "transferOperationId": "a26c27d4-5093-44b6-ab64-cb7e4f7028b9",
+    "nativeGeneration": 2,
+    "apiGeneration": 1,
+    "peerGeneration": 1,
+    "configurationSha256": "b23296ece53ded8d51e98ccbfd9ec54c208f47684b75fe6672f3bc6a991a7adb",
+    "nativeMtls": true,
+    "systemd": "Simulated observation; no systemd jobs",
+    "workflowScope": "Ownership prerequisites; Stack/Terraform execution remains pending",
+    "httpStatus": 503,
+    "originalTransfer": {
+      "operationId": "a26c27d4-5093-44b6-ab64-cb7e4f7028b9",
+      "expectedEndpointId": "f221a5c1-be97-4273-bf89-71908cfd6cc8",
+      "resource": {
+        "kind": "host_configuration",
+        "id": "5f27a7ff-a493-82aa-babd-de99772703c0"
+      },
+      "expectedGeneration": 1,
+      "expectedOwner": {
+        "manager": "terraform",
+        "id": "6cd20126-27cd-4514-8bb0-c80c5dd78010",
+        "key": "firecrab_host_configuration.api"
+      },
+      "owner": {
+        "manager": "terraform",
+        "id": "ed29b9b9-978b-4075-95d1-dc4cf97ba4a9",
+        "key": "firecrab_host_configuration.api"
+      }
+    },
+    "apiMirror": {
+      "endpointId": "f221a5c1-be97-4273-bf89-71908cfd6cc8",
+      "resource": {
+        "kind": "host_configuration",
+        "id": "5f27a7ff-a493-82aa-babd-de99772703c0"
+      },
+      "generation": 1,
+      "owner": {
+        "manager": "terraform",
+        "id": "6cd20126-27cd-4514-8bb0-c80c5dd78010",
+        "key": "firecrab_host_configuration.api"
+      }
+    },
+    "nativeReceiptConfirmed": false
+  },
+  "recovered": {
+    "runtimeArtifacts": {
+      "api": {
+        "sha256": "550e1cfa9f0657735cc03c8bb8e39cbe3f03dc585807c980b0a5cf1e701ae98f",
+        "sourceCommit": "2b1fdce65e646ae087779422a4e52910bc14cd03"
+      },
+      "nativeCli": {
+        "sha256": "bcfe2173fec224562c635bd8816e49c303e9e0b7683d1df836673caf38d72c45",
+        "sourceCommit": "52f3eacaca932dbc5aec111110abdec4721bdf5b"
+      }
+    },
+    "phase": "Recovered after API restart",
+    "endpointId": "f221a5c1-be97-4273-bf89-71908cfd6cc8",
+    "installationId": "5f27a7ff-a493-82aa-babd-de99772703c0",
+    "transferOperationId": "a26c27d4-5093-44b6-ab64-cb7e4f7028b9",
+    "nativeGeneration": 2,
+    "apiGeneration": 2,
+    "peerGeneration": 1,
+    "configurationSha256": "b23296ece53ded8d51e98ccbfd9ec54c208f47684b75fe6672f3bc6a991a7adb",
+    "nativeMtls": true,
+    "systemd": "Simulated observation; no systemd jobs",
+    "workflowScope": "Ownership prerequisites; Stack/Terraform execution remains pending",
+    "httpStatus": 503,
+    "originalTransfer": {
+      "operationId": "a26c27d4-5093-44b6-ab64-cb7e4f7028b9",
+      "expectedEndpointId": "f221a5c1-be97-4273-bf89-71908cfd6cc8",
+      "resource": {
+        "kind": "host_configuration",
+        "id": "5f27a7ff-a493-82aa-babd-de99772703c0"
+      },
+      "expectedGeneration": 1,
+      "expectedOwner": {
+        "manager": "terraform",
+        "id": "6cd20126-27cd-4514-8bb0-c80c5dd78010",
+        "key": "firecrab_host_configuration.api"
+      },
+      "owner": {
+        "manager": "terraform",
+        "id": "ed29b9b9-978b-4075-95d1-dc4cf97ba4a9",
+        "key": "firecrab_host_configuration.api"
+      }
+    },
+    "apiMirror": {
+      "endpointId": "f221a5c1-be97-4273-bf89-71908cfd6cc8",
+      "resource": {
+        "kind": "host_configuration",
+        "id": "5f27a7ff-a493-82aa-babd-de99772703c0"
+      },
+      "generation": 1,
+      "owner": {
+        "manager": "terraform",
+        "id": "6cd20126-27cd-4514-8bb0-c80c5dd78010",
+        "key": "firecrab_host_configuration.api"
+      }
+    },
+    "originalOperationRecovered": true,
+    "configurationUnchanged": true,
+    "recovered": {
+      "operationId": "a26c27d4-5093-44b6-ab64-cb7e4f7028b9",
+      "ownership": {
+        "endpointId": "f221a5c1-be97-4273-bf89-71908cfd6cc8",
+        "resource": {
+          "kind": "host_configuration",
+          "id": "5f27a7ff-a493-82aa-babd-de99772703c0"
+        },
+        "generation": 2,
+        "owner": {
+          "manager": "terraform",
+          "id": "ed29b9b9-978b-4075-95d1-dc4cf97ba4a9",
+          "key": "firecrab_host_configuration.api"
+        }
+      }
+    },
+    "peerOwnership": {
+      "endpointId": "f221a5c1-be97-4273-bf89-71908cfd6cc8",
+      "resource": {
+        "kind": "shell",
+        "id": "ad6e06ad-b373-4940-bc35-1a2bb2642a9d"
+      },
+      "generation": 1,
+      "owner": {
+        "manager": "terraform",
+        "id": "6cd20126-27cd-4514-8bb0-c80c5dd78010",
+        "key": "firecrab_shell.peer"
+      }
+    },
+    "nativeReceiptConfirmed": true
+  },
+  "bundle": [
+    {
+      "file": "index-CA7l_2vU.js",
+      "sha256": "9fa8708a4e55d290a0eb380d87282002b79e1d0bd4a04ed0071d252d7f360606"
+    },
+    {
+      "file": "index-Dst_jZJv.css",
+      "sha256": "20a67c23f03c5af9e8e8edad64b203c7f8e1457e50e39c11d1bb6be0514dadfd"
+    }
+  ],
+  "screenshots": {
+    "iac-548-native-host-desktop-2026-11-03.png": "cd5b8d32b5771bb68df35d9bc22f2b0afe0f8c8bf34b924a4048130714164bcf",
+    "iac-548-native-host-uncertain-desktop-2026-11-03.png": "ed5d300737a2e70cb0b2eb325ae60a68d53d5f60fe36e54696a42cd65694ffb9",
+    "iac-548-native-host-recovered-desktop-2026-11-03.png": "8d9a16d97f9d6caeb5d472c435b79938b12b6e935e778da08edae0abf41b3283",
+    "iac-548-native-host-recovered-mobile-2026-11-03.png": "2a64065d0accba3060b01f035cc1168ff42308edc101b43ddd1b8c899e4e6267"
+  },
+  "harnessSha256": {
+    "native-capture-runtime.py": "de2a199d3f8424f8bff8f0b0c9b28bb4b3b6b25bce97f866528985029984cedd",
+    "capture-native-host.mjs": "ed8b7ddcf675b100286a7719a77b8adafde9e17a981ae4c2dada63acb3225640"
+  },
+  "verificationOverlay": "The clearly labeled overlay reports actual test observations. Product cards were refreshed and checked against the actual API before the recovered capture."
+}

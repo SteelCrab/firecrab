@@ -5,8 +5,15 @@
 
 /// Length-prefixed frame read/write helpers shared by all helper protocols.
 pub mod framing;
+/// Physical host ownership proofs shared by API and privileged control brokers.
+pub mod host_iac;
+/// Native outer-host installation proofs, distinct from Linux guest Pipe ownership.
+pub mod native_iac;
 /// Network-helper-specific request/response payloads (bridge, TAP, firewall).
 pub mod network;
+/// Stable physical directory proofs used by native configuration and VM cleanup.
+#[cfg(unix)]
+pub mod physical_directory;
 /// Shared pipe manifest and restricted helper operations.
 pub mod pipe;
 pub mod security_group;

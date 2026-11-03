@@ -60,6 +60,10 @@ PAYLOAD_LICENSE=
 PAYLOAD_THIRD_PARTY=
 PAYLOAD_INVENTORY=
 PAYLOAD_GPL=
+NATIVE_LEASE_PID=
+NATIVE_LEASE_INPUT=
+NATIVE_LEASE_OUTPUT=
+NATIVE_LEASE_STARTED=0
 
 # BEGIN RELEASE_HELPERS
 if [ -f "$REPO_ROOT/scripts/firecrab-release.sh" ]; then
@@ -209,11 +213,86 @@ else
 fi
 
 cleanup_payload() {
+    # EOF preserves the original pending record after any failed/interrupted installer.
+    if [ -n "${NATIVE_LEASE_INPUT:-}" ]; then exec {NATIVE_LEASE_INPUT}>&- || true; fi
+    if [ -n "${NATIVE_LEASE_OUTPUT:-}" ]; then exec {NATIVE_LEASE_OUTPUT}<&- || true; fi
+    if [ -n "${NATIVE_LEASE_PID:-}" ]; then wait "$NATIVE_LEASE_PID" 2>/dev/null || true; fi
     if [ -n "${PAYLOAD_TMP:-}" ] && [ -d "$PAYLOAD_TMP" ]; then
         rm -rf "$PAYLOAD_TMP"
     fi
 }
 trap cleanup_payload EXIT
+
+# Use an existing or verified payload CLI. Older bootstraps cannot modify an IaC journal.
+native_maintenance_cli() {
+    local candidate
+    local candidates=("$PREFIX/bin/firecrab" "$LIBDIR/firecrab")
+    # A prior uninstall removes the installed CLI but retains the native journal.
+    # An explicitly supplied local payload can authorize a later purge.
+    if [ -n "$BIN_DIR" ]; then candidates+=("$BIN_DIR/firecrab"); fi
+    if [ -n "${PAYLOAD_BIN:-}" ]; then candidates+=("$PAYLOAD_BIN/firecrab"); fi
+    for candidate in "${candidates[@]}"; do
+        if [ -x "$candidate" ] && "$candidate" iac native-maintenance --help >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+native_maintenance_begin() {
+    local action=$1 native_cli operation input_hash reply original_input original_output
+    [ "$NATIVE_LEASE_STARTED" = 0 ] || return 0
+    if ! native_cli=$(native_maintenance_cli); then
+        if [ -d "$CONFDIR/iac-native" ] || [ -L "$CONFDIR/iac-native" ]; then
+            die "native ownership requires a compatible CLI; release ownership or use the matching installer"
+        fi
+        # A new install can obtain its compatible CLI from the verified payload below.
+        return 0
+    fi
+    operation=${FIRECRAB_NATIVE_MAINTENANCE_OPERATION_ID:-}
+    input_hash=${FIRECRAB_NATIVE_MAINTENANCE_INPUT_SHA256:-}
+    if [ -n "$operation" ] || [ -n "$input_hash" ]; then
+        if [ -z "$operation" ] || [ -z "$input_hash" ]; then
+            die "incomplete parent native maintenance identity"
+        fi
+        $SUDO env CONFDIR="$CONFDIR" UNITDIR="$UNITDIR" "$native_cli" iac native-maintenance-check \
+            --operation-id "$operation" --action "$action" --input-sha256 "$input_hash" \
+            || die "parent native maintenance does not authorize this installer step"
+        NATIVE_LEASE_STARTED=1
+        return 0
+    fi
+    IFS= read -r operation < /proc/sys/kernel/random/uuid
+    input_hash=$(printf '%s\0' "$action" "$PREFIX" "$LIBDIR" "$DATADIR" "$CONFDIR" "$UNITDIR" \
+        "$FIRECRAB_USER" "$FIRECRAB_GROUP" "$RELEASE_VERSION" "$LIBC" "$BIN_DIR" "$PURGE" | sha256sum)
+    input_hash=${input_hash%% *}
+    coproc FIRECRAB_NATIVE_LEASE {
+        $SUDO env CONFDIR="$CONFDIR" UNITDIR="$UNITDIR" "$native_cli" iac native-maintenance \
+            --operation-id "$operation" --action "$action" --input-sha256 "$input_hash"
+    }
+    NATIVE_LEASE_PID=$FIRECRAB_NATIVE_LEASE_PID
+    original_input=${FIRECRAB_NATIVE_LEASE[1]}
+    original_output=${FIRECRAB_NATIVE_LEASE[0]}
+    exec {NATIVE_LEASE_INPUT}>&"$original_input"
+    exec {NATIVE_LEASE_OUTPUT}<&"$original_output"
+    exec {original_input}>&-
+    exec {original_output}<&-
+    IFS= read -r -t 10 reply <&"$NATIVE_LEASE_OUTPUT" || die "native admission unavailable; inspect operation $operation"
+    [ "$reply" = "{\"operationId\":\"$operation\",\"state\":\"ready\"}" ] \
+        || die "native admission rejected; inspect operation $operation"
+    NATIVE_LEASE_STARTED=1
+}
+
+native_maintenance_complete() {
+    [ -n "$NATIVE_LEASE_PID" ] || return 0
+    printf 'complete\n' >&"$NATIVE_LEASE_INPUT"
+    exec {NATIVE_LEASE_INPUT}>&-
+    NATIVE_LEASE_INPUT=
+    wait "$NATIVE_LEASE_PID" || die "native completion is unknown; inspect the original maintenance operation"
+    NATIVE_LEASE_PID=
+    exec {NATIVE_LEASE_OUTPUT}<&-
+    NATIVE_LEASE_OUTPUT=
+}
 
 if [ "$WITH_PIPE" = 1 ] && [ "$MODE" != install ] && [ "$MODE" != check ]; then
     die "--with-pipe is supported with installation or --check"
@@ -1029,6 +1108,7 @@ require_sudo_ticket() {
 # The default path: fill the gaps, fetch binaries, lay out, start.
 do_install() {
     require_sudo_ticket
+    native_maintenance_begin install
     # Checked before anything is installed: refusing after pulling in five
     # packages would be a waste of the operator's time.
     check_systemd || die "this installer manages systemd units"
@@ -1039,6 +1119,7 @@ do_install() {
     check_kvm || warn "continuing, but VMs will not start until KVM is available"
 
     resolve_payload
+    native_maintenance_begin install
     ensure_account
     ensure_directories
     record_host_baseline
@@ -1142,6 +1223,7 @@ restore_host_baseline() {
 # Removes what this script installed; data only with --purge.
 do_uninstall() {
     require_sudo_ticket
+    native_maintenance_begin uninstall
     stop_vm_units
     for unit in firecrab-address-updater.service firecrab-tunnel.service firecrab-ingress.service firecrab-api.service firecrab-helper.service firecrab-net-helper.service; do
         $SUDO systemctl disable --now "$unit" 2>/dev/null || true
@@ -1200,3 +1282,4 @@ case "$MODE" in
     install) do_install ;;
     uninstall) do_uninstall ;;
 esac
+native_maintenance_complete

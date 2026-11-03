@@ -537,7 +537,19 @@ async fn wait_for_phase(state: &AppState, id: Uuid, want: ServicePhase) -> Micro
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("deployment never reached {want:?}"))
+    .unwrap_or_else(|_| {
+        let latest=state.store.service_deployment(id).unwrap();
+        let diagnostic=latest.as_ref().map(|record|{
+            let replicas=record.instances.iter().map(|instance|{
+                let resource=firecrab_stack::ManagedResource{kind:"vm".into(),id:instance.vm_id.to_string()};
+                let operations=state.store.iac_native_operations(&resource).unwrap();
+                let current=state.vms.lock().unwrap().get(&instance.vm_id).map(|vm|vm.state);
+                (instance.vm_id,current,operations)
+            }).collect::<Vec<_>>();
+            (record.phase,record.error.as_deref(),replicas)
+        });
+        panic!("deployment never reached {want:?}; latest phase, redacted error and replica/native states: {diagnostic:?}")
+    })
 }
 
 /// Serve one single-platform manifest at `/v2/app/manifests/v1` and return the
@@ -644,7 +656,8 @@ async fn s3_and_service_secrets_reach_the_guest_together_after_vm_restart() {
         .unwrap();
 
     // The fake VMM still uses the real boot path and a real ext4 service launcher.
-    let image = directory.path().join("rootfs");
+    let image = directory.path().join("rootfs-with-launcher");
+    std::fs::copy(directory.path().join("rootfs"), &image).unwrap();
     for command in ["mkdir /etc/firecrab", "mkdir /etc/firecrab/services.d"] {
         let output = std::process::Command::new("debugfs")
             .args(["-w", "-R", command])
@@ -664,10 +677,10 @@ async fn s3_and_service_secrets_reach_the_guest_together_after_vm_restart() {
         .templates
         .register_spec(crate::templates::TemplateSpec {
             alias: alias.clone(),
-            version: template.version.clone(),
+            version: format!("{}-service-launcher", template.version),
             kernel: "kernel".into(),
             initrd: None,
-            rootfs: "rootfs".into(),
+            rootfs: "rootfs-with-launcher".into(),
             boot_args: "console=ttyS0".into(),
         })
         .unwrap();
@@ -1305,6 +1318,7 @@ pub(super) async fn domain_helper(
                 write_frame(
                     &mut stream,
                     &NetworkResponseEnvelope {
+                        host_iac: None,
                         version: PROTOCOL_VERSION,
                         request_id: envelope.request_id,
                         result,
@@ -1536,6 +1550,7 @@ async fn publication_helper(
             write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result: failures.next().map_or(Ok(()), Err),

@@ -89,6 +89,8 @@ pub(crate) enum PoolStoreError {
     Deleting(Uuid),
     #[error("pool {0} has no ready member")]
     Exhausted(Uuid),
+    #[error("image has an unfinished operation")]
+    ImageBusy,
     #[error("pool {id} still has {count} active lease(s)")]
     InUse { id: Uuid, count: u32 },
     #[error("pool record {id} is invalid: {reason}")]
@@ -176,7 +178,11 @@ pub(crate) struct Acquired {
 
 impl Store {
     pub(crate) fn insert_pool(&self, pool: &PoolRow) -> Result<(), PoolStoreError> {
-        let result = self.lock().execute(
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        super::iac_native::ensure_idle(&tx, &super::iac_images::resource(&pool.template))
+            .map_err(|_| PoolStoreError::ImageBusy)?;
+        let result = tx.execute(
             &format!(
                 "INSERT INTO vm_pools ({POOL_COLUMNS}) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
@@ -200,7 +206,10 @@ impl Store {
             ],
         );
         match result {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                tx.commit()?;
+                Ok(())
+            }
             Err(rusqlite::Error::SqliteFailure(error, _))
                 if error.code == rusqlite::ErrorCode::ConstraintViolation =>
             {

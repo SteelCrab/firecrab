@@ -1,7 +1,7 @@
 //! Atomic reservations for data disks. Attachments survive API and VM restarts.
 
 use super::*;
-use firecrab_api_types::{MicroBlockStorageResponse, VmBlockStorageMount};
+use firecrab_api_types::MicroBlockStorageResponse;
 
 pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS micro_block_storages (
@@ -141,8 +141,24 @@ impl Store {
     }
 
     /// Reserves an unattached disk against concurrent attach before removing its file.
-    pub(crate) fn begin_block_storage_delete(&self, id: Uuid) -> Result<(), PersistenceError> {
-        let conn = self.lock();
+    pub(crate) fn begin_block_storage_delete(
+        &self,
+        id: Uuid,
+        expected: &firecrab_stack::ResourceOwnership,
+    ) -> Result<(), PersistenceError> {
+        let mut locked = self.lock();
+        let conn = locked.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let target = firecrab_stack::ManagedResource {
+            kind: "volume".into(),
+            id: id.to_string(),
+        };
+        if super::iac_owners::read(&conn, &target)? != *expected {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        if !super::iac_owners::public_write_allowed(&conn, &target)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        super::iac_volume_attachments::ensure_volume_deletable(&conn, id)?;
         let volume = conn
             .query_row(&format!("{SELECT} WHERE id = ?1"), [id.to_string()], decode)
             .optional()?
@@ -161,6 +177,7 @@ impl Store {
             "UPDATE micro_block_storages SET phase = 'deleting' WHERE id = ?1",
             [id.to_string()],
         )?;
+        conn.commit()?;
         Ok(())
     }
 
@@ -170,90 +187,6 @@ impl Store {
             "DELETE FROM micro_block_storages WHERE id = ?1 AND phase = 'deleting' AND attached_vm_id IS NULL",
             [id.to_string()],
         )?;
-        Ok(())
-    }
-
-    /// Atomically reserves every requested disk, or leaves all reservations unchanged.
-    pub(crate) fn attach_block_storages(
-        &self,
-        vm_id: Uuid,
-        mounts: &[VmBlockStorageMount],
-    ) -> Result<(), PersistenceError> {
-        let mut conn = self.lock();
-        let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let instance: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM vms WHERE id = ?1 AND purpose = 'instance')",
-            [vm_id.to_string()],
-            |row| row.get(0),
-        )?;
-        if !instance {
-            return Err(PersistenceError::BlockStorageConflict {
-                message: "only user MicroVMs can own volumes",
-            });
-        }
-        for mount in mounts {
-            let mut statement = transaction.prepare(
-                "SELECT id, mount_path FROM micro_block_storages WHERE attached_vm_id = ?1",
-            )?;
-            let existing = statement
-                .query_map([vm_id.to_string()], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            if existing.iter().any(|(id, path)| {
-                id != &mount.volume_id.to_string()
-                    && crate::block_storage::paths_overlap(path, &mount.mount_path)
-            }) {
-                return Err(PersistenceError::BlockStorageConflict {
-                    message: "volume mount paths must not overlap",
-                });
-            }
-            let changed = transaction.execute(
-                "UPDATE micro_block_storages SET attached_vm_id = ?2, mount_path = ?3
-                 WHERE id = ?1 AND phase = 'ready' AND
-                 (attached_vm_id IS NULL OR (attached_vm_id = ?2 AND mount_path = ?3))",
-                params![
-                    mount.volume_id.to_string(),
-                    vm_id.to_string(),
-                    mount.mount_path
-                ],
-            )?;
-            if changed == 0 {
-                return Err(PersistenceError::BlockStorageConflict {
-                    message: "volume is missing, busy, or already attached",
-                });
-            }
-        }
-        let count: u32 = transaction.query_row(
-            "SELECT COUNT(*) FROM micro_block_storages WHERE attached_vm_id = ?1",
-            [vm_id.to_string()],
-            |row| row.get(0),
-        )?;
-        if count > crate::block_storage::MAX_VOLUMES_PER_VM as u32 {
-            return Err(PersistenceError::BlockStorageConflict {
-                message: "a VM can have at most 8 data volumes",
-            });
-        }
-        transaction.commit()?;
-        Ok(())
-    }
-
-    /// Clears the expected reservation only; callers hold the owning VM's lifecycle lock.
-    pub(crate) fn detach_block_storage(
-        &self,
-        id: Uuid,
-        vm_id: Uuid,
-    ) -> Result<(), PersistenceError> {
-        let changed = self.lock().execute(
-            "UPDATE micro_block_storages SET attached_vm_id = NULL, mount_path = NULL
-             WHERE id = ?1 AND attached_vm_id = ?2",
-            params![id.to_string(), vm_id.to_string()],
-        )?;
-        if changed == 0 {
-            return Err(PersistenceError::BlockStorageConflict {
-                message: "volume attachment changed; refresh and retry",
-            });
-        }
         Ok(())
     }
 

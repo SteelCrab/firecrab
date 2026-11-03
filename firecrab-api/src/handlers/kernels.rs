@@ -1,16 +1,23 @@
 //! Kernel catalog, acquisition, and lifecycle endpoints.
 
+#[cfg(test)]
 use std::collections::BTreeMap;
 
 use axum::Json;
-use axum::extract::{Path, State};
+#[cfg(test)]
+use axum::extract::Path;
+use axum::extract::State;
+#[cfg(test)]
 use axum::http::StatusCode;
+#[cfg(test)]
 use axum::response::IntoResponse;
 use firecrab_api_types::KernelResponse;
 
 use crate::error::AppError;
+#[cfg(test)]
 use crate::image_install::Architecture;
 use crate::kernel_manager;
+#[cfg(test)]
 use crate::oci::kernel as kernel_cache;
 use crate::server::RequestId;
 use crate::state::AppState;
@@ -38,6 +45,7 @@ pub async fn list_kernels(
 }
 
 /// `GET /api/kernels/{version}/install` — latest acquisition snapshot.
+#[cfg(test)]
 pub async fn get_kernel_install(
     State(state): State<AppState>,
     Path(version): Path<String>,
@@ -54,6 +62,7 @@ pub async fn get_kernel_install(
 
 /// `POST /api/kernels/{version}/install` — build and verify a source release
 /// into the shared cache. `stable` resolves the current upstream stable.
+#[cfg(test)]
 pub async fn start_kernel_install(
     State(state): State<AppState>,
     Path(version): Path<String>,
@@ -112,6 +121,7 @@ pub async fn start_kernel_install(
 }
 
 /// `DELETE /api/kernels/{version}` — remove an unused local kernel cache.
+#[cfg(test)]
 pub async fn delete_kernel(
     State(state): State<AppState>,
     Path(version): Path<String>,

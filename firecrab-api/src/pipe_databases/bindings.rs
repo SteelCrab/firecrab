@@ -200,10 +200,24 @@ impl BindingRecord {
 
 /// Create only an owned account and grant its selected application privileges.
 pub async fn provision(admin: &DatabaseRecord, binding: &BindingRecord) -> Result<(), Error> {
+    provision_checked(admin, binding, || Ok(())).await
+}
+
+/// Recheck the server's attempt after acquiring the actual SQL-session lock.
+pub async fn provision_checked(
+    admin: &DatabaseRecord,
+    binding: &BindingRecord,
+    check: impl FnOnce() -> Result<(), Error> + Send,
+) -> Result<(), Error> {
     let mut privileged = admin.input.clone();
     privileged.write_enabled = true;
     let settings = privileged.settings(admin.id).map_err(Error::Invalid)?;
     let mut connection = DatabaseConnection::connect_write(&privileged, &settings).await?;
+    account_lock(&mut connection, binding.id, true).await?;
+    if let Err(error) = check() {
+        let _ = account_lock(&mut connection, binding.id, false).await;
+        return Err(error);
+    }
     write::initialize(&mut connection, admin.id).await?;
     let private = binding
         .connection
@@ -342,15 +356,30 @@ pub async fn provision(admin: &DatabaseRecord, binding: &BindingRecord) -> Resul
         .await?
         .ping()
         .await?;
-    Ok(())
+    account_lock(&mut connection, binding.id, false).await
 }
 
 /// Revoke an owned account without removing source application data.
+#[cfg(test)]
 pub async fn revoke(admin: &DatabaseRecord, binding: &BindingRecord) -> Result<(), Error> {
+    revoke_checked(admin, binding, || Ok(())).await
+}
+
+/// Revocation and provisioning use one lock namespace, including recovery attempts.
+pub async fn revoke_checked(
+    admin: &DatabaseRecord,
+    binding: &BindingRecord,
+    check: impl FnOnce() -> Result<(), Error> + Send,
+) -> Result<(), Error> {
     let mut privileged = admin.input.clone();
     privileged.write_enabled = true;
     let settings = privileged.settings(admin.id).map_err(Error::Invalid)?;
     let mut connection = DatabaseConnection::connect_write(&privileged, &settings).await?;
+    account_lock(&mut connection, binding.id, true).await?;
+    if let Err(error) = check() {
+        let _ = account_lock(&mut connection, binding.id, false).await;
+        return Err(error);
+    }
     match &mut connection {
         DatabaseConnection::Postgres(c) => {
             let comment: Option<Option<String>> = sqlx::query_scalar(
@@ -360,7 +389,7 @@ pub async fn revoke(admin: &DatabaseRecord, binding: &BindingRecord) -> Result<(
             .fetch_optional(&mut *c)
             .await?;
             if comment.is_none() {
-                return Ok(());
+                return account_lock(&mut connection, binding.id, false).await;
             }
             if comment.flatten().as_deref() != Some(&format!("firecrab-binding:{}", binding.id)) {
                 return Err(Error::Invalid(
@@ -411,7 +440,7 @@ pub async fn revoke(admin: &DatabaseRecord, binding: &BindingRecord) -> Result<(
         DatabaseConnection::Mysql(c) => {
             let attrs:Option<String>=sqlx::query_scalar("SELECT CAST(ATTRIBUTE AS CHAR CHARACTER SET utf8mb4) FROM information_schema.user_attributes WHERE USER=? AND HOST='%'").bind(&binding.role).fetch_optional(&mut *c).await?;
             if attrs.is_none() {
-                return Ok(());
+                return account_lock(&mut connection, binding.id, false).await;
             }
             if !attrs
                 .and_then(|a| serde_json::from_str::<serde_json::Value>(&a).ok())
@@ -423,6 +452,46 @@ pub async fn revoke(admin: &DatabaseRecord, binding: &BindingRecord) -> Result<(
             }
             write::mysql_command(c, &format!("DROP USER '{}'@'%'", binding.role)).await?;
         }
+    }
+    account_lock(&mut connection, binding.id, false).await
+}
+
+/// Session locks remain held on the database while a cancelled query is still executing.
+async fn account_lock(
+    connection: &mut DatabaseConnection,
+    id: Uuid,
+    acquire: bool,
+) -> Result<(), Error> {
+    let key = format!("fc-binding:{id}");
+    let locked = match connection {
+        DatabaseConnection::Postgres(c) => {
+            let sql = if acquire {
+                "SELECT pg_try_advisory_lock(hashtextextended($1,0))"
+            } else {
+                "SELECT pg_advisory_unlock(hashtextextended($1,0))"
+            };
+            sqlx::query_scalar::<_, bool>(sql)
+                .bind(&key)
+                .fetch_one(c)
+                .await?
+        }
+        DatabaseConnection::Mysql(c) => {
+            let sql = if acquire {
+                "SELECT GET_LOCK(?,0)"
+            } else {
+                "SELECT RELEASE_LOCK(?)"
+            };
+            sqlx::query_scalar::<_, Option<i64>>(sql)
+                .bind(&key)
+                .fetch_one(c)
+                .await?
+                == Some(1)
+        }
+    };
+    if !locked {
+        return Err(Error::Invalid(
+            "The binding account is busy; recover the original operation after its SQL session finishes",
+        ));
     }
     Ok(())
 }

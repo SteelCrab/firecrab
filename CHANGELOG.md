@@ -28,12 +28,220 @@ Entries land here as work merges, and move under the next version heading when t
 ## [0.5.0] - 2026-11-02
 
 Release validation updates for the React dashboard and guest workflows.
+
 See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 [#573](https://github.com/SteelCrab/firecrab/pull/573).
 
 ### Added
 
-- None.
+- Reject security-group rule changes when a VM's runtime cannot be checked at
+  its registered storage root. Never treat an empty default root as evidence
+  that a VM with a missing storage mapping is stopped.
+
+- Add operator-only typed current-configuration observation for all six shared
+  adapters. Read configuration and authority in one snapshot, exclude credential
+  values and application observations, report active recovery fences, and return
+  storage failures separately from confirmed missing configuration.
+
+- Recheck native schedule configuration ownership in the write transaction,
+  including unchanged enable/disable requests and uncertain native work.
+  Use a private canonical lock file on macOS to avoid SQLite lock conflicts;
+  retain the existing Linux scheduler lock for compatibility with older APIs.
+
+- Add shared local service OTLP plans with explicit consent, unchanged-session
+  no-ops, immutable receipts and metadata-only observation. Recheck service
+  environment conflicts in each setting/edit/admission transaction and preserve
+  the borrowed service and local history when removing export configuration.
+
+- Add shared security-group plans with ordered rules, borrowed network authority,
+  inactive-runtime checks and immutable completion receipts. Fence native writers
+  in SQLite and retain exact Sandbox parent-generation authority for child groups.
+
+- Add shared Secret plans with plan-bound encrypted private inputs, exact source
+  versions, retained data by default and recovery of the original file effect
+  after a lost SQLite acknowledgement. Keep uncertain target/address/Stack
+  reservations and reject late service references across API processes (#548).
+
+- Add shared Sandbox access-policy plans for both managers. Normalize grant sets,
+  pin original source directories, commit authority and receipts atomically, and
+  preserve restricted deny rows on removal and emergency revocation.
+
+- Freeze Stack service Secret versions and borrowed authority before admission.
+  Keep original values encrypted, bind them to the accepted parent and child,
+  preserve them after rotation or restart, and fence recapture after cleanup.
+
+- Retain one original service deployment identity per Stack apply, including
+  initial deployments. Recover its acknowledgement before choosing a replacement
+  strategy, and reject changed inputs or a different parent authority.
+
+- Add shared AI model-default plans with exact project scope, borrowed connection
+  ownership and retained credential-source generations. Fence rotation and UUID
+  recreation, preserve same-account token renewal and retain apply workers after
+  HTTP cancellation. Keep original Shell plan hashes compatible.
+
+- Add typed shared Shell plans for Stack and Terraform ownership. Freeze exact
+  inputs before execution, commit configuration and original receipts atomically,
+  preserve VM revision pins and reject stale plans or conflicting public writes.
+  Other executable configuration adapters remain pending in #548.
+
+- Pin VM cleanup to its original physical directories and disk generation.
+  Reject storage remapping, preserve retained artifact identity and require
+  explicit legacy proof review before resuming unproven cleanup.
+
+- Reserve shared IaC operation UUIDs across ownership changes, native mutations
+  and Stack applies. Preserve original receipts and reject cross-family reuse
+  through SQLite transactions, including concurrent API processes.
+
+- Retain complete original VM boot inputs, including initrd presence, across API
+  restart. Verify them for every start before runtime effects. Add explicit
+  inactive legacy review with immutable operation receipts and ownership fences.
+
+- Preserve independent Sandbox preview binding ownership with original task/runtime
+  checks and transactional fences for native changes, handoffs and parent deletion.
+- Add native management-settings ownership with physical installation identity,
+  existing Firecrab certificate mTLS, durable native/API reservations and original
+  operation recovery. Add independent Linux API/helper configuration ownership
+  and durable root maintenance leases that fence CLI and standalone installer
+  changes. Full planned lifecycle, delegation and both workflows remain pending
+  under the #548 integration hold.
+- Include the issuing CA's Authority Key Identifier in new host certificates
+  for strict X.509 client compatibility; preserve existing keys and CA material.
+- Preserve fixed-address ownership with the original registry, credential digest
+  and exclusive connector pins, including after private address-record deletion.
+- Retain independent named Cloudflare connector ownership on the privileged host
+  and API. Pin credential content and fence shared-unit controls, credential
+  replacement and new provisioning even after external configuration deletion.
+- Protect independent Quick Tunnel ownership, including legacy shared-unit
+  controls. Retain generated address connector IDs and original private input
+  before publication, fence uncertain local changes and preserve parent authority
+  through interruption and recovery (#548).
+
+- Retain host Ingress ownership in the privileged Pipe broker as well as the API.
+  Fence native CLI changes under the same host lock. Recover lost ownership
+  acknowledgements and API restarts without a second transfer or data changes (#548).
+
+- Retain image install, OCI import, kernel update and deletion intents with exact
+  source, credential and boot pins. Reuse completed OCI files during recovery,
+  fence late writers and SQL creation, support image ownership transfer and
+  explicit artifact retention, and preserve browser retry identities (#548).
+
+- Preserve immutable image versions, their verified boot hashes and pre-seeded
+  locators across alias changes and API restart. Refuse changed version reuse,
+  corrupt catalog overwrites and implicit rollback after missing artifacts.
+  Protect historical kernel dependencies and retain integrity metadata through
+  Deploy cache collection (#548).
+
+- Retain kernel installation and removal intents, original source checksums,
+  physical root identities and immutable receipts. Fence recovery and ownership
+  transfer, hold image borrow leases and publish package artifacts without
+  overwriting shared kernels or previously admitted image files (#548).
+
+- Require observed endpoint and execution-generation preconditions for unfinished
+  native recovery. Recheck them inside every typed recovery transaction, retain
+  immutable terminal receipts and fence old project cleanup callbacks (#548).
+
+- Preserve immutable migration versions across database aliases and management
+  transfers. Expose redacted original job receipts, serialize migration SQL on its
+  source session, reject stale executors and permit generation-checked retries
+  only after known failures before maintenance effects (#548).
+
+- Journal managed database broker preparation, repair and disconnection before
+  guest changes. Recover original TLS, UUIDs, pinned images and disk generations.
+  Atomically record activation, preserve disks on disconnect, fence ownership
+  transfer and retain accepted dashboard operations until completion (#548).
+
+- Retain external database broker verification requests before connection attempts.
+  Commit selection and its immutable receipt together. Keep original credentials
+  and endpoint identities across API restart, HTTP disconnect and dashboard reload (#548).
+
+- Reserve managed database broker VM identities before creation. Fence controller
+  checkpoints and VM insertion with the original configuration generation. Exclude
+  competing API supervisors, protect generated broker VMs from independent edits,
+  and retain existing VM records when a duplicate creation is rejected (#548).
+
+- Retain native database event setup, pause, detach and removal intents. Recover
+  original captures and inbox credentials after interruption. Guard qualified
+  capture ownership, broker settings and parent reservations. Keep retained-event
+  delivery available when removal is blocked. Preserve dashboard retry identities (#548).
+
+- Preserve native database operation and endpoint identities across dashboard
+  reloads and lost responses without storing credentials or request bodies in
+  browser storage. Resolve original receipts before further changes, and retry
+  legacy pending bindings with their existing account UUID (#548).
+
+- Retain database binding account intents, generated credentials and parent
+  reservations across interruption. Recover the original account, protect
+  ownership transfers and preserve derived table grants under the original
+  maintenance attempt. Reject implicit inbox changes before broker setup (#548).
+
+- Retain native database connection create, update and write-access intents before
+  external SQL. Preserve exact retry receipts, fence matching database aliases and
+  recover interrupted setup using its original identity. Serialize maintenance
+  executors across API processes and reject results from older attempts (#548).
+
+- Recheck saved database connection authority before committing credential changes.
+  Validate service configuration/delete writers inside SQLite, retain private
+  Stack step identity and reject late callbacks after their operation finishes (#548).
+
+- Separate automatic deployment policy ownership from service configuration.
+  Preserve watcher state during transfer, reject stale registry observations and
+  recheck private image-writer authority when committing deployment admission.
+  Expose management suspension and protect managed policies from parent deletion (#548).
+
+- Scope volume attachment ownership to exact volume/VM pairs. Check parent and
+  attachment authority at commit, retain disk contents during handover and block
+  implicit detachment through parent deletion. Persist native VM cleanup and its
+  immutable disk policy before dispatch; confirm host teardown and atomically
+  commit metadata, lease release and receipt. Recover the original operation from
+  the Stack dashboard, including after a lost acknowledgement (#548).
+
+- Transfer service Deploy token ownership without changing its verifier or expiry.
+  Keep operator revocation available, including during Stack work. Atomically retire
+  the credential and authority with a durable receipt; block late issuance and
+  parent removal from bypassing managed credentials (#548).
+
+- Manage service OTLP configuration ownership independently from release snapshots,
+  including disabled slots. Preserve opt-in boundaries, reject late saves after
+  ownership changes and prevent parent deletion from erasing managed settings (#548).
+
+- Protect cluster host drain settings, VM placement intents and cluster service
+  updates with exact IaC ownership. Preserve authenticated heartbeats, existing
+  intent reconciliation, host-qualified workload identities and operation history.
+  Block transfers while controller work remains pending or claimed (#548).
+
+- Reserve Queue engine ownership by exact broker VM UUID. Journal installation,
+  start and stop before dispatch, retain the original VM/disk/credentials during
+  recovery, and fence older execution attempts. Recover interrupted work through
+  the API, CLI and dashboard; never redispatch an acknowledged retry (#548).
+
+- Protect Sandbox access-policy ownership by exact delegated host UUID.
+  Keep operator revocation available with atomic permission denial, authority invalidation
+  and a durable acknowledgement. Reject late saves after revocation and preserve newer
+  grants when retrying an old completed operation (#548).
+- Group Stack resources into icon sections with resource counts.
+  Keep native Stack registrations and Terraform state owners in separate cards,
+  and show each state owner once instead of repeating it for every resource (#548).
+- Add generation-checked Stack/Terraform ownership transfer for networks,
+  standalone VMs, services, registered storage roots, volumes, security groups,
+  shells, schedules, pools, queues, database and S3 connections, Secrets and Secret
+  connections, Auth provider slots, direct registry logins, AI connections and project
+  model defaults, Sandbox environments/projects and Git sources, with persistent endpoint identity, durable retry
+  acknowledgements, mTLS CLI commands and dashboard visibility. Other service adapters and the
+  Terraform provider remain tracked in #548.
+- Persist Sandbox project deletion before removing its private workspace.
+  Keep the worker alive after HTTP disconnects, retain uncertain-operation fences
+  across restart, and recover the original typed action through API and CLI commands.
+  Preserve borrowed sources and block late work against retired project identities (#548).
+- Disconnect exact Git source generations with immutable operation acknowledgements.
+  Retain infrastructure, bindings and check history. Preserve removal generations across
+  restart and recreation so an old delete retry cannot remove a new source (#548).
+- Keep generated Sandbox environment networks, security groups and VMs under
+  their parent controller. Reject independent adoption and public mutation,
+  while allowing old child bindings to be released without deleting resources.
+- Define the IaC coverage contract for all services shipped through v0.4.0,
+  including controller, Pipe and Sandbox configuration. A frozen API inventory
+  and CI check track missing Stack and Terraform coverage without claiming it
+  is implemented (#548).
 
 ### Changed
 
@@ -45,10 +253,36 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Fixed
 
+- Keep matching AI model plans from renewing OAuth tokens or sending provider
+  requests. Preserve configuration and original credential-source versions.
+
+- Retain original AWS signing credentials for ECR image recovery. Renew expired
+  registry logins only for the original account and region; preserve legacy
+  static-login retries and omit all credential values from public operations.
+
+- Read Linux directory birth times through statx on both GNU and musl builds.
+  Permit an explicitly supplied matching CLI to verify native ownership when
+  purging data after a prior uninstall removed the installed CLI.
+
+- Serialize shared operation-key initialization before reading existing history.
+  Explicitly release image/kernel publication locks so forked descriptor copies
+  cannot extend a completed native operation lease.
+
+- Recover an original no-effect host ownership rejection after another API first
+  claims the same physical installation, without reading its newer owner state.
+- Wait for the initial pool list before showing New pool, so an empty-list
+  response cannot remove the button while the creation flow is opening (#559).
 - Match live OCI image inspection, image deletion and SSH browser checks to
   the current React dashboard controls. Allow guest actions up to 30 seconds.
 - Prevent dashboard isolation test fixtures from selecting the same free port
   by starting each server before allocating the next fixture's port.
+
+- Keep HTTP GET failover available when an upstream exits after a long response
+  wait. Bound retry attempts by the route's peer count and retain the existing
+  protection against replaying sent POST/PATCH requests (#548).
+- Reject direct VM and network mutations while their owning Stack apply is
+  queued or running. Existing bindings and reserved create/replacement IDs
+  are protected; reads and terminal-operation recovery remain available (#548).
 
 ### Improved
 

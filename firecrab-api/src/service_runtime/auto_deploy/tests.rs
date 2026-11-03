@@ -719,3 +719,6 @@ async fn declaration_controls_work_before_initial_deploy_and_follow_stopped_serv
     assert!(watch.status.pause.is_none());
     assert_eq!(watch.status.policy, service.spec.auto_deploy);
 }
+
+#[path = "ownership_tests.rs"]
+mod ownership_tests;

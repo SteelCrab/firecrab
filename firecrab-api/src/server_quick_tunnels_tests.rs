@@ -148,6 +148,7 @@ async fn multiple_quick_tunnels_forward_only_the_requested_intent_and_preserve_o
             write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: firecrab_helper_protocol::PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result: Ok(()),
@@ -297,7 +298,7 @@ async fn cloudflare_disconnect_keeps_origin_protection_and_its_service_deadline(
             }
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
-        write_frame(&mut stream, &NetworkResponseEnvelope {
+        write_frame(&mut stream, &NetworkResponseEnvelope { host_iac: None,
             version: firecrab_helper_protocol::PROTOCOL_VERSION,
             request_id: envelope.request_id,
             result: Ok(()),
@@ -403,7 +404,7 @@ async fn firecrab_address_forwards_only_local_intent_and_keeps_origin_protection
                     request: Operation::ManageFirecrabTunnel { request: expected }
                 }
             );
-            write_frame(&mut stream,&NetworkResponseEnvelope{version:firecrab_helper_protocol::PROTOCOL_VERSION,request_id:envelope.request_id,result:Ok(()),pipe:Some(serde_json::from_value(json!({"config":null,"units":[],"nginxAvailable":true,"cloudflaredAvailable":true})).unwrap())}).await.unwrap();
+            write_frame(&mut stream,&NetworkResponseEnvelope { host_iac: None,version:firecrab_helper_protocol::PROTOCOL_VERSION,request_id:envelope.request_id,result:Ok(()),pipe:Some(serde_json::from_value(json!({"config":null,"units":[],"nginxAvailable":true,"cloudflaredAvailable":true})).unwrap())}).await.unwrap();
         }
     });
     let app = router(directory.path(), socket).await;

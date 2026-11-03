@@ -103,6 +103,12 @@ pub(in crate::service_runtime) async fn prepare_template(
     let auth = require_image_auth(state, &current.spec.image, deployment.id)
         .await
         .map_err(|_| "Release image is unavailable; restore the matching Auth connection")?;
+    let authority = crate::image_lifecycle::capture(&state.templates, &alias)
+        .map_err(|_| "Image management authority is unavailable")?;
+    let templates = (*state.templates)
+        .clone()
+        .with_image_authority(authority)
+        .map_err(|_| "Image management authority changed")?;
     let credential = auth.registry_credential().await.map_err(str::to_owned)?;
     match state
         .oci_imports
@@ -111,7 +117,7 @@ pub(in crate::service_runtime) async fn prepare_template(
         Ok(_) => {
             oci::run_deploy_import(
                 state.oci_imports.clone(),
-                (*state.templates).clone(),
+                templates,
                 reference,
                 alias.clone(),
                 Some(credential),

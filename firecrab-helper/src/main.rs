@@ -382,6 +382,8 @@ async fn serve(
 /// restarts this very process cannot run before its answer is on the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AfterResponse {
+    /// Typed host metadata, returned only after its durable target transaction.
+    HostIac(Box<firecrab_helper_protocol::host_iac::Reply>),
     Pipe(Box<firecrab_helper_protocol::pipe::Snapshot>),
     /// Normal: keep serving requests on this connection.
     Continue,
@@ -478,13 +480,17 @@ async fn respond_to(
             supported: PROTOCOL_VERSION,
         })
     };
-    let (result, after, pipe) = match result {
-        Ok(AfterResponse::Pipe(snapshot)) => (Ok(()), AfterResponse::Continue, Some(*snapshot)),
-        Ok(after) => (Ok(()), after, None),
-        Err(error) => (Err(error), AfterResponse::Continue, None),
+    let (result, after, pipe, host_iac) = match result {
+        Ok(AfterResponse::Pipe(snapshot)) => {
+            (Ok(()), AfterResponse::Continue, Some(*snapshot), None)
+        }
+        Ok(AfterResponse::HostIac(reply)) => (Ok(()), AfterResponse::Continue, None, Some(*reply)),
+        Ok(after) => (Ok(()), after, None, None),
+        Err(error) => (Err(error), AfterResponse::Continue, None, None),
     };
     (
         NetworkResponseEnvelope {
+            host_iac,
             pipe,
             version: PROTOCOL_VERSION,
             request_id: envelope.request_id,
@@ -672,6 +678,9 @@ async fn dispatch(
     peer: &vm_unit::Peer,
 ) -> Result<AfterResponse, HelperFailure> {
     match request {
+        NetworkRequest::HostIac { request } => pipe::host_iac(request)
+            .await
+            .map(|reply| AfterResponse::HostIac(Box::new(reply))),
         NetworkRequest::Pipe { request } => {
             let changed = !matches!(
                 request,

@@ -2639,6 +2639,7 @@ impl OciExt4Image {
 /// supplies neither field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OciBootableImage {
+    kernel_lease: Option<crate::kernel_lifecycle::KernelArtifactLease>,
     rootfs: OciExt4Image,
     kernel: PathBuf,
     initrd: Option<PathBuf>,
@@ -3206,12 +3207,80 @@ pub async fn write_provisioned_ext4(
 /// built from kernel.org's current stable source and cached under `image_root`.
 /// A host that cannot fetch or build it reuses a verified installed kernel or
 /// an installed catalog kernel. The ext4 stays in place; nothing is registered.
+#[cfg(test)]
 pub async fn pair_ext4_with_host_kernel(
     image: OciExt4Image,
     image_root: &Path,
 ) -> Result<OciBootableImage, ResolveError> {
     let pair = boot::host_kernel_pair(image_root).await?;
     boot::pair_ext4_with_kernel(image, image_root, &pair)
+}
+
+/// Retain a managed kernel borrow until the image finishes registration.
+async fn pair_ext4_with_managed_kernel(
+    image: OciExt4Image,
+    templates: &TemplateRegistry,
+) -> Result<OciBootableImage, ResolveError> {
+    #[cfg(test)]
+    if templates.iac_store().is_none() {
+        return pair_ext4_with_host_kernel(image, templates.image_root_path()).await;
+    }
+
+    let pair = boot::host_kernel_pair_managed(templates).await?;
+    boot::pair_ext4_with_kernel(image, templates.image_root_path(), &pair)
+}
+
+/// Freeze an operator override by content before asynchronous native image work.
+pub(crate) async fn capture_import_kernel(
+    templates: &TemplateRegistry,
+) -> Result<(String, Option<(PathBuf, String)>), ResolveError> {
+    if let Some(path) = kernel::configured_kernel_override() {
+        let pair =
+            kernel::operator_kernel(templates.image_root_path(), Architecture::HOST, &path).await?;
+        let sha = kernel::inspect_kernel(
+            &templates.image_root_path().join(&pair.kernel),
+            Architecture::HOST,
+        )
+        .await?;
+        return Ok(("operator".into(), Some((pair.kernel, sha.encoded().into()))));
+    }
+    let release = kernel::latest_stable(
+        templates.image_root_path(),
+        kernel::configured_releases_url().as_deref(),
+    )
+    .await?;
+    Ok((release.version, None))
+}
+
+pub(crate) fn retained_import_spec(
+    intent: &crate::persistence::iac_images::ImageIntent,
+) -> Result<crate::templates::TemplateSpec, ResolveError> {
+    let crate::persistence::iac_images::ImageSource::Oci {
+        display_version,
+        kernel_version,
+        kernel_override,
+        ..
+    } = &intent.definition().source
+    else {
+        return Err(ResolveError::Malformed(
+            "Original OCI preparation is unavailable".into(),
+        ));
+    };
+    let relative = kernel_override
+        .as_ref()
+        .map(|(path, _)| path.clone())
+        .or_else(|| crate::kernel_manager::cache_path(kernel_version))
+        .ok_or_else(|| ResolveError::Malformed("Original OCI kernel is unavailable".into()))?;
+    let pair = kernel::boot_pair(Architecture::HOST, relative, kernel_version);
+    Ok(crate::templates::TemplateSpec {
+        alias: intent.definition().alias.clone(),
+        version: display_version.clone(),
+        kernel: pair.kernel,
+        initrd: pair.initrd,
+        boot_args: pair.boot_args,
+        rootfs: Path::new("rootfs/operations")
+            .join(format!("{}.ext4", intent.operation.operation_id)),
+    })
 }
 
 /// Derives a unique alias and version from the reference and attaches them
@@ -3307,6 +3376,19 @@ async fn run_import(
     credential: Option<RegistryCredential>,
     cache_owner: Option<crate::persistence::Store>,
 ) {
+    let templates = if templates.image_authority().is_none() && templates.iac_store().is_some() {
+        match crate::image_lifecycle::capture(&templates, &alias)
+            .and_then(|authority| templates.clone().with_image_authority(authority))
+        {
+            Ok(templates) => templates,
+            Err(_) => {
+                tracker.finish_err_with(&alias, "Original image authority changed");
+                return;
+            }
+        }
+    } else {
+        templates
+    };
     if let Err(error) = import_oci_image(
         &tracker,
         &templates,
@@ -3323,7 +3405,7 @@ async fn run_import(
     tracker.finish_ok_with(&alias, "import succeeded — template registered");
 }
 
-async fn import_oci_image(
+pub(crate) async fn import_oci_image(
     tracker: &ImageInstallTracker,
     templates: &TemplateRegistry,
     reference: &ImageReference,
@@ -3332,7 +3414,13 @@ async fn import_oci_image(
     cache_owner: Option<&crate::persistence::Store>,
 ) -> Result<(), ResolveError> {
     let image_root = templates.image_root_path();
-    let scratch = image_root.join(".oci/import").join(alias);
+    let scratch_name = match templates.image_authority() {
+        Some(crate::image_lifecycle::ImageAuthority::Operation(work)) => {
+            work.intent().operation.operation_id.to_string()
+        }
+        _ => alias.into(),
+    };
+    let scratch = image_root.join(".oci/import").join(scratch_name);
     reset_import_scratch(&scratch).await?;
 
     let result = import_oci_image_in_scratch(
@@ -3429,8 +3517,24 @@ async fn import_oci_image_in_scratch(
     let layers = LayerCache::new(image_root);
 
     tracker.append_log(alias, "caching image blobs");
+    let pull_reference = match templates.image_authority() {
+        Some(crate::image_lifecycle::ImageAuthority::Operation(work)) => {
+            work.check()
+                .map_err(|_| ResolveError::Malformed("Original OCI authority changed".into()))?;
+            let crate::persistence::iac_images::ImageSource::Oci { reference, .. } =
+                &work.intent().definition().source
+            else {
+                return Err(ResolveError::Malformed(
+                    "Original OCI source changed".into(),
+                ));
+            };
+            ImageReference::parse(reference)
+                .map_err(|_| ResolveError::Malformed("Original OCI source is invalid".into()))?
+        }
+        _ => reference.clone(),
+    };
     let cached = cache_image_blobs(
-        reference,
+        &pull_reference,
         Architecture::HOST,
         insecure,
         &blobs,
@@ -3501,7 +3605,7 @@ async fn import_oci_image_in_scratch(
     let ext4 = write_provisioned_ext4(&provisioned, &scratch.join("rootfs.ext4")).await?;
 
     tracker.append_log(alias, "pairing host kernel");
-    let bootable = pair_ext4_with_host_kernel(ext4, image_root).await?;
+    let bootable = pair_ext4_with_managed_kernel(ext4, templates).await?;
 
     tracker.append_log(alias, "naming template");
     let named = name_oci_image(bootable, reference, templates)?;

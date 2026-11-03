@@ -60,6 +60,10 @@ async fn history_retains_twenty_rootfs_files_and_keeps_manual_images_and_kernels
     assert!(root.path().join(&manual.rootfs).exists());
     assert!(root.path().join(&manual.kernel).exists());
     assert_eq!(collect(&state).await.unwrap(), 0);
+    // GC must preserve the unrelated manual image's recorded integrity check.
+    fs::write(root.path().join(&manual.rootfs), b"changed-after-gc").unwrap();
+    let restarted = crate::templates::TemplateRegistry::load_from(root.path()).unwrap();
+    assert!(restarted.resolve_alias(&manual.alias).is_none());
 }
 
 #[tokio::test]

@@ -325,6 +325,7 @@ pub fn validate(
 impl Platform {
     pub fn save(&self, home: &Path, settings: &ManagerResources) -> Result<(), Error> {
         let _lock = lock(home)?;
+        crate::native_host::require_unmanaged(home)?;
         let status = self.status(home)?;
         if status
             .operation
@@ -343,6 +344,7 @@ impl Platform {
     }
 
     fn apply_saved(&self, home: &Path) -> Result<(), Error> {
+        crate::native_host::require_unmanaged(home)?;
         let status = self.status(home)?;
         let minimum_disk = match status.current.as_ref() {
             Some(current) => current.disk_gib,

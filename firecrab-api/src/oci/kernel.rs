@@ -16,7 +16,7 @@ pub(crate) const DEFAULT_RELEASES_URL: &str = "https://www.kernel.org/releases.j
 /// Shared native build recipe embedded so installed hosts need no checkout.
 const BUILD_SCRIPT: &str = include_str!("../../../scripts/build-host-kernel.sh");
 /// Receipt revision that invalidates cached images when the build recipe changes.
-const BUILD_REVISION: &str = "firecrab-host1";
+pub(crate) const BUILD_REVISION: &str = "firecrab-host1";
 /// Maximum image size accepted from either the builder or an operator.
 const KERNEL_MAX_BYTES: u64 = 256 * 1024 * 1024;
 /// Maximum compressed source size accepted during download and cache reuse.
@@ -147,13 +147,21 @@ pub(crate) async fn built_kernel(
     architecture: Architecture,
     version: &str,
 ) -> Option<BuiltKernel> {
+    let receipt = recorded_kernel(image_root, architecture, version).await?;
+    (receipt.build_revision == BUILD_REVISION).then_some(receipt)
+}
+/// Older verified installations retain their original content pin across recipe upgrades.
+pub(crate) async fn recorded_kernel(
+    image_root: &Path,
+    architecture: Architecture,
+    version: &str,
+) -> Option<BuiltKernel> {
     let bytes = tokio::fs::read(receipt_path(image_root, architecture, version)?)
         .await
         .ok()?;
     let receipt: BuiltKernel = serde_json::from_slice(&bytes).ok()?;
     if receipt.version != version
         || receipt.architecture != architecture.as_str()
-        || receipt.build_revision != BUILD_REVISION
         || Some(&receipt.source_url) != source_url(version).as_ref()
         || Sha256Digest::parse(&format!("sha256:{}", receipt.source_sha256)).is_err()
         || Sha256Digest::parse(&format!("sha256:{}", receipt.image_sha256)).is_err()
@@ -460,6 +468,7 @@ pub(crate) async fn cache_lock(
 
 /// Reuse a verified image or build the requested source release on this host.
 /// `stable` resolves through the catalog; legacy entries require a valid cache.
+#[cfg(test)]
 pub(crate) async fn ensure_managed_kernel(
     image_root: &Path,
     architecture: Architecture,
@@ -467,6 +476,35 @@ pub(crate) async fn ensure_managed_kernel(
     releases_url: Option<&str>,
     tracker: Option<&ImageInstallTracker>,
 ) -> Result<PathBuf, ResolveError> {
+    ensure_managed_kernel_authorized(
+        image_root,
+        architecture,
+        requested,
+        releases_url,
+        tracker,
+        None,
+    )
+    .await
+}
+/// Managed callers retain their private attempt through source selection and each publish.
+pub(crate) async fn ensure_managed_kernel_authorized(
+    image_root: &Path,
+    architecture: Architecture,
+    requested: &str,
+    releases_url: Option<&str>,
+    tracker: Option<&ImageInstallTracker>,
+    authority: Option<&crate::kernel_lifecycle::KernelWork>,
+) -> Result<PathBuf, ResolveError> {
+    #[cfg(not(test))]
+    if authority.is_none() {
+        return Err(unavailable(
+            architecture,
+            "Kernel mutation requires its original private journal",
+        ));
+    }
+    if let Some(authority) = authority {
+        authority.check()?;
+    }
     let version = if requested == "stable" {
         latest_stable(image_root, releases_url).await?.version
     } else {
@@ -509,10 +547,28 @@ pub(crate) async fn ensure_managed_kernel(
         "{}/sha256sums.asc",
         url.rsplit_once('/').expect("source directory").0
     );
-    let checksum = source_checksum(
-        &fetch_bytes(&checksum_url, METADATA_MAX_BYTES).await?,
-        &version,
-    )?;
+    let checksum = if let Some(source) = authority.map(|a| a.source()).transpose()?.flatten() {
+        if source.url != url {
+            return Err(unavailable(
+                architecture,
+                "Original kernel source URL changed",
+            ));
+        }
+        Sha256Digest::parse(&format!("sha256:{}", source.sha256))
+            .map_err(|_| unavailable(architecture, "Invalid original kernel source checksum"))?
+    } else {
+        let checksum = source_checksum(
+            &fetch_bytes(&checksum_url, METADATA_MAX_BYTES).await?,
+            &version,
+        )?;
+        if let Some(authority) = authority {
+            authority.prepare(&url, checksum.encoded())?;
+        }
+        checksum
+    };
+    if let Some(authority) = authority {
+        authority.effects()?;
+    }
     let sources = image_root.join(".oci/kernel/sources");
     tokio::fs::create_dir_all(&sources)
         .await
@@ -572,6 +628,9 @@ pub(crate) async fn ensure_managed_kernel(
         .map_err(|_| unavailable(architecture, "kernel build exceeded two hours"))??;
         log(tracker, requested, "verifying built kernel".to_owned());
         let image_digest = inspect_kernel(&staged, architecture).await?;
+        if let Some(authority) = authority {
+            authority.check_image(&image_digest)?;
+        }
         let receipt = BuiltKernel {
             version: version.clone(),
             architecture: architecture.as_str().to_owned(),
@@ -580,15 +639,24 @@ pub(crate) async fn ensure_managed_kernel(
             image_sha256: image_digest.encoded().to_owned(),
             build_revision: BUILD_REVISION.to_owned(),
         };
+        if let Some(authority) = authority {
+            authority.check()?;
+        }
         tokio::fs::rename(
             staged.with_added_extension("config"),
             destination.with_added_extension("config"),
         )
         .await
         .map_err(|source| cache_io("publish kernel config", destination.clone(), source))?;
+        if let Some(authority) = authority {
+            authority.check()?;
+        }
         tokio::fs::rename(&staged, &destination)
             .await
             .map_err(|source| cache_io("publish built kernel", destination.clone(), source))?;
+        if let Some(authority) = authority {
+            authority.check()?;
+        }
         write_atomic(
             &destination.with_added_extension("json"),
             &serde_json::to_vec_pretty(&receipt).expect("serialize kernel receipt"),
@@ -597,7 +665,9 @@ pub(crate) async fn ensure_managed_kernel(
         Ok(relative)
     }
     .await;
-    let _ = tokio::fs::remove_dir_all(&work).await;
+    if authority.is_none_or(|authority| authority.check_root().is_ok()) {
+        let _ = tokio::fs::remove_dir_all(&work).await;
+    }
     result
 }
 
@@ -788,14 +858,46 @@ async fn run_build(
         .await
         .map_err(|error| unavailable(architecture, format!("wait for kernel builder: {error}")))?;
     if !status.success() {
+        let stdout = stdout?;
+        let stderr = stderr?;
+        if let Some((tracker, job)) = progress {
+            tracker.append_log(
+                job,
+                format!(
+                    "[kernel:build] failed; exit={}; reason={}",
+                    status
+                        .code()
+                        .map_or_else(|| "signal".into(), |code| code.to_string()),
+                    build_failure_reason(&stdout, &stderr)
+                ),
+            );
+        }
         return Err(unavailable(
             architecture,
-            format!("kernel build failed ({status}):\n{}\n{}", stdout?, stderr?),
+            format!("kernel build failed ({status}):\n{stdout}\n{stderr}"),
         ));
     }
     stdout?;
     stderr?;
     Ok(())
+}
+
+/// Only fixed diagnostic categories reach public progress; compiler paths and text remain private.
+fn build_failure_reason(stdout: &str, stderr: &str) -> &'static str {
+    for (pattern, reason) in [
+        ("No space left on device", "storage_full"),
+        ("Killed signal", "compiler_killed"),
+        ("out of memory", "memory_exhausted"),
+        ("No rule to make target", "missing_build_target"),
+        ("command not found", "missing_build_tool"),
+        ("No such file or directory", "missing_build_input"),
+        ("Permission denied", "permission_denied"),
+    ] {
+        if stdout.contains(pattern) || stderr.contains(pattern) {
+            return reason;
+        }
+    }
+    "compiler_failed"
 }
 
 /// Forward compiler output to the install job and retain a bounded error tail.
@@ -813,7 +915,26 @@ async fn build_log(
     })? {
         let line: String = line.chars().take(2000).collect();
         if let Some((tracker, job)) = progress {
-            tracker.append_log(job, &line);
+            // Compiler output can include private build paths; publish only fixed phases.
+            if let Some(phase) = line.split_whitespace().next().filter(|phase| {
+                matches!(
+                    *phase,
+                    "CC" | "LD"
+                        | "AR"
+                        | "AS"
+                        | "GEN"
+                        | "HOSTCC"
+                        | "HOSTLD"
+                        | "UPD"
+                        | "CHK"
+                        | "CALL"
+                        | "OBJCOPY"
+                        | "DTC"
+                        | "INSTALL"
+                )
+            }) {
+                tracker.append_log(job, format!("[kernel:build] {phase}"));
+            }
         }
         tail.push_back(line);
         if tail.len() > 10 {
@@ -824,6 +945,7 @@ async fn build_log(
 }
 
 /// Select an operator image, current stable, or a verified installed fallback.
+#[cfg(test)]
 pub(super) async fn ensure_host_kernel(
     image_root: &Path,
     architecture: Architecture,
@@ -865,7 +987,7 @@ pub(super) async fn ensure_host_kernel(
 }
 
 /// Verify and copy an operator image into a cache entry named by its digest.
-async fn operator_kernel(
+pub(super) async fn operator_kernel(
     image_root: &Path,
     architecture: Architecture,
     supplied: &Path,
@@ -917,8 +1039,13 @@ async fn operator_kernel(
 }
 
 /// Pair a managed image with the boot arguments for its CPU architecture.
-fn boot_pair(architecture: Architecture, kernel: PathBuf, version: &str) -> KernelBootPair {
+pub(super) fn boot_pair(
+    architecture: Architecture,
+    kernel: PathBuf,
+    version: &str,
+) -> KernelBootPair {
     KernelBootPair {
+        kernel_lease: None,
         architecture,
         source_alias: format!("Linux {version}"),
         kernel,
@@ -1020,5 +1147,42 @@ fn kernel_io(operation: &'static str, path: PathBuf, source: io::Error) -> Resol
         operation,
         path,
         source,
+    }
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+    #[test]
+    fn compiler_failure_categories_never_copy_private_diagnostics() {
+        for (input, expected) in [
+            ("/private/key: No space left on device", "storage_full"),
+            (
+                "cc1: Killed signal in /private/provider-response",
+                "compiler_killed",
+            ),
+            (
+                "/private/build: fatal error: /private/token.h: No such file or directory",
+                "missing_build_input",
+            ),
+            ("private-provider-response", "compiler_failed"),
+        ] {
+            assert_eq!(build_failure_reason("", input), expected);
+        }
+    }
+    #[tokio::test]
+    async fn compiler_progress_publishes_fixed_phases_without_private_paths() {
+        let tracker = ImageInstallTracker::disabled();
+        tracker.begin("kernel").unwrap();
+        let output = b"make: entering /private/kernel-build/source\n  CC /private/kernel-build/key-value.o\ncustom private-provider-response\n  LD vmlinux\n";
+        let tail = build_log(&output[..], Some((&tracker, "kernel")))
+            .await
+            .unwrap();
+        assert!(tail.contains("/private/kernel-build"));
+        let public = tracker.snapshot("kernel").log;
+        assert!(public.contains("[kernel:build] CC"));
+        assert!(public.contains("[kernel:build] LD"));
+        assert!(!public.contains("/private/"));
+        assert!(!public.contains("private-provider-response"));
     }
 }

@@ -24,6 +24,8 @@ use crate::templates::{KernelFormat, kernel_architecture};
 pub(super) struct KernelBootPair {
     /// Architecture the kernel boots, which must be this host's.
     pub architecture: Architecture,
+    /// Prevent removal or transfer until the referencing image is registered.
+    pub kernel_lease: Option<crate::kernel_lifecycle::KernelArtifactLease>,
     /// Upstream release, operator override, or catalog image named in errors.
     pub source_alias: String,
     /// Image-root-relative kernel path.
@@ -35,6 +37,7 @@ pub(super) struct KernelBootPair {
 }
 
 /// The architecture-matched pair this host will boot imported images with.
+#[cfg(test)]
 pub(super) async fn host_kernel_pair(image_root: &Path) -> Result<KernelBootPair, ResolveError> {
     resolve_kernel_pair(
         image_root,
@@ -45,7 +48,97 @@ pub(super) async fn host_kernel_pair(image_root: &Path) -> Result<KernelBootPair
     .await
 }
 
+/// API-backed OCI preparation uses the durable kernel actor and retains its borrow lease.
+pub(super) async fn host_kernel_pair_managed(
+    templates: &TemplateRegistry,
+) -> Result<KernelBootPair, ResolveError> {
+    let root = templates.image_root_path();
+    if let Some(crate::image_lifecycle::ImageAuthority::Operation(work)) =
+        templates.image_authority()
+    {
+        work.check()
+            .map_err(|_| ResolveError::Malformed("Original image authority changed".into()))?;
+        if let crate::persistence::iac_images::ImageSource::Oci {
+            kernel_version,
+            kernel_override,
+            ..
+        } = &work.intent().definition().source
+        {
+            if let Some((relative, expected)) = kernel_override {
+                let actual =
+                    kernel::inspect_kernel(&root.join(relative), Architecture::HOST).await?;
+                if actual.encoded() != expected {
+                    return Err(ResolveError::Malformed(
+                        "Original image kernel changed".into(),
+                    ));
+                }
+                let mut pair =
+                    kernel::boot_pair(Architecture::HOST, relative.clone(), kernel_version);
+                pair.boot_args = work
+                    .kernel(relative, actual.encoded(), &pair.boot_args)
+                    .map_err(|_| ResolveError::Malformed("Original image kernel changed".into()))?;
+                return Ok(pair);
+            }
+            let lease = crate::kernel_lifecycle::ensure(
+                templates,
+                kernel_version,
+                kernel::configured_releases_url().as_deref(),
+            )
+            .await?;
+            let mut pair = kernel::boot_pair(
+                Architecture::HOST,
+                lease.relative().to_owned(),
+                kernel_version,
+            );
+            pair.kernel_lease = Some(lease);
+            let actual =
+                kernel::inspect_kernel(&root.join(&pair.kernel), Architecture::HOST).await?;
+            pair.boot_args = work
+                .kernel(&pair.kernel, actual.encoded(), &pair.boot_args)
+                .map_err(|_| ResolveError::Malformed("Original image kernel changed".into()))?;
+            return Ok(pair);
+        }
+    }
+    if templates.iac_store().is_none() {
+        #[cfg(test)]
+        {
+            return host_kernel_pair(root).await;
+        }
+        #[cfg(not(test))]
+        {
+            return Err(ResolveError::Malformed(
+                "Kernel preparation requires its original API context".into(),
+            ));
+        }
+    }
+    if let Some(path) = kernel::configured_kernel_override() {
+        return kernel::operator_kernel(root, Architecture::HOST, &path).await;
+    }
+    let releases = kernel::configured_releases_url();
+    let attempt = crate::kernel_lifecycle::ensure(templates, "stable", releases.as_deref()).await;
+    if let Ok(lease) = attempt {
+        let version = crate::kernel_manager::version_for_path(lease.relative())
+            .ok_or_else(|| ResolveError::Malformed("Invalid managed kernel path".into()))?;
+        let mut pair = kernel::boot_pair(Architecture::HOST, lease.relative().to_owned(), &version);
+        pair.kernel_lease = Some(lease);
+        return Ok(pair);
+    }
+    for version in kernel::installed_versions(root, Architecture::HOST).await {
+        if !kernel::cached_kernel_is_valid(root, Architecture::HOST, &version).await {
+            continue;
+        }
+        if let Ok(lease) = crate::kernel_lifecycle::ensure(templates, &version, None).await {
+            let mut pair =
+                kernel::boot_pair(Architecture::HOST, lease.relative().to_owned(), &version);
+            pair.kernel_lease = Some(lease);
+            return Ok(pair);
+        }
+    }
+    installed_catalog_pair(root, Architecture::HOST).ok_or_else(|| attempt.unwrap_err())
+}
+
 /// Builds the current stable kernel, with verified local kernels as fallback.
+#[cfg(test)]
 pub(super) async fn resolve_kernel_pair(
     image_root: &Path,
     architecture: Architecture,
@@ -90,6 +183,7 @@ pub(super) fn catalog_kernel_pair(
                 return None;
             }
             Some(KernelBootPair {
+                kernel_lease: None,
                 architecture,
                 source_alias: image.alias,
                 kernel: PathBuf::from(&artifact.kernel),
@@ -115,6 +209,7 @@ pub(super) fn pair_ext4_with_kernel(
     let header = read_kernel_header(&kernel_path, pair)?;
     verify_kernel_architecture(&pair.kernel, &header, pair.architecture)?;
     Ok(OciBootableImage {
+        kernel_lease: pair.kernel_lease.clone(),
         rootfs: image,
         kernel: pair.kernel.clone(),
         initrd: pair.initrd.clone(),

@@ -1,0 +1,1078 @@
+{
+  "baseline": {
+    "tag": "v0.4.0",
+    "commit": "d426b52ff04223aa0ba9c289fc492448cbb2cb86"
+  },
+  "resources": [
+    {
+      "id": "kernel",
+      "scope": "host",
+      "dependsOn": [],
+      "configuration": "Pinned version, architecture and content digest; installed state",
+      "source": "public-docs/guides/kernels.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/kernels"
+      ],
+      "identity": "version and architecture",
+      "update": "New content/version is a new immutable installation",
+      "readiness": "Verified installed digest and architecture",
+      "removal": "Remove only owned unused artifact; retain borrowed installations"
+    },
+    {
+      "id": "image",
+      "scope": "host",
+      "dependsOn": [
+        "kernel",
+        "registry"
+      ],
+      "configuration": "Catalog/package/OCI source, immutable boot inputs, alias and installed state",
+      "source": "public-docs/guides/images.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/images",
+        "/api/oci"
+      ],
+      "identity": "alias, version and boot hashes",
+      "update": "New immutable version; alias changes never mutate admitted VM pins",
+      "readiness": "Verified boot artifacts available for target architecture",
+      "removal": "Retain versions referenced by workloads"
+    },
+    {
+      "id": "storage_root",
+      "scope": "host",
+      "dependsOn": [],
+      "configuration": "Registered path/device and capacity metadata; unregister without formatting or erasing borrowed data",
+      "source": "public-docs/guides/storage.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/storage",
+        "/api/micro-storages"
+      ],
+      "identity": "host-qualified storage ID",
+      "update": "Metadata in place; path/device change requires explicit replacement",
+      "readiness": "Registered accessible root and validated capacity",
+      "removal": "Unregister only when unused; never format or erase borrowed data"
+    },
+    {
+      "id": "volume",
+      "scope": "host",
+      "dependsOn": [
+        "storage_root"
+      ],
+      "configuration": "Name, size, filesystem identity and explicit data-retention policy",
+      "source": "public-docs/guides/volumes.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/microblockstorage"
+      ],
+      "identity": "host-qualified volume UUID",
+      "update": "Follow baseline immutability; size/filesystem replacement needs data consent",
+      "readiness": "Verified on-disk identity; no conflicting writer",
+      "removal": "Retain data artifact and discoverable identity unless deletion authorized"
+    },
+    {
+      "id": "network",
+      "scope": "host",
+      "dependsOn": [],
+      "configuration": "IPv4/IPv6, uplink, internet access and DNS mode supported by the baseline API",
+      "source": "public-docs/guides/networking.md",
+      "stack": "partial",
+      "terraform": "experimental",
+      "apiNamespaces": [
+        "/api/network",
+        "/api/micro-networks"
+      ],
+      "identity": "host-qualified network UUID",
+      "update": "Internet/DNS changes follow API; address-family/subnet/uplink change plans replacement when immutable",
+      "readiness": "Bridge, lease service, firewall and requested DNS configured",
+      "removal": "Delete only when all owned dependents are removed and no external users remain"
+    },
+    {
+      "id": "security_group",
+      "scope": "host",
+      "dependsOn": [
+        "network"
+      ],
+      "configuration": "Name, network and ordered ingress/egress rules",
+      "source": "public-docs/guides/security-groups.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/security-groups"
+      ],
+      "identity": "network-qualified UUID",
+      "update": "Rules/name in place; network change requires replacement",
+      "readiness": "Rules validated and applied to intended network",
+      "removal": "Reject removal while referenced; do not weaken another owner's VM policy"
+    },
+    {
+      "id": "shell",
+      "scope": "host",
+      "dependsOn": [],
+      "configuration": "Named scripts and immutable revision/content identities; assignment does not rerun scripts on refresh",
+      "source": "firecrab-api/src/handlers/shells.rs",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/shells"
+      ],
+      "identity": "shell UUID and revision hash",
+      "update": "Create a new immutable revision; explicit VM revision reassignment",
+      "readiness": "Content checksum and revision available",
+      "removal": "Retain revisions still referenced; no command execution on refresh"
+    },
+    {
+      "id": "vm",
+      "scope": "host",
+      "dependsOn": [
+        "image",
+        "network",
+        "storage_root",
+        "security_group",
+        "shell"
+      ],
+      "configuration": "CPU, RAM, disk, env, egress, shell pins, port forwards and desired running/stopped state",
+      "source": "public-docs/reference/api.md",
+      "stack": "partial",
+      "terraform": "experimental",
+      "apiNamespaces": [
+        "/api/vms",
+        "/ws/vms"
+      ],
+      "identity": "host-qualified VM UUID",
+      "update": "Supported edits in place; template/network/storage changes follow replacement policy",
+      "readiness": "Confirmed declared runtime state plus guest/network readiness",
+      "removal": "Stop own VM; retain root data by default and detach retained data volumes"
+    },
+    {
+      "id": "volume_attachment",
+      "scope": "host",
+      "dependsOn": [
+        "volume",
+        "vm"
+      ],
+      "configuration": "Exact volume/VM references and guest mount path; inactive-VM attachment rules",
+      "source": "public-docs/guides/volumes.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [],
+      "identity": "volume UUID and VM UUID",
+      "update": "Mount/target changes detach then attach under explicit stop permission",
+      "readiness": "Exact exclusive attachment and required guest mount on next start",
+      "removal": "Detach and preserve volume contents"
+    },
+    {
+      "id": "pool",
+      "scope": "host",
+      "dependsOn": [
+        "image",
+        "network",
+        "storage_root",
+        "security_group"
+      ],
+      "configuration": "Pool spec, capacity and lifecycle policy; member VMs and leases stay controller-owned",
+      "source": "firecrab-api-types/src/pool.rs",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pools"
+      ],
+      "identity": "host-qualified pool UUID",
+      "update": "Follow mutable pool fields; incompatible template changes plan replacement",
+      "readiness": "Desired pool capacity and member health; controller owns leases",
+      "removal": "Release only parent-owned members; borrowed images/networks remain"
+    },
+    {
+      "id": "schedule",
+      "scope": "host",
+      "dependsOn": [
+        "vm"
+      ],
+      "configuration": "Start/stop action, one-time or cron timing, time zone and enabled state",
+      "source": "public-docs/guides/schedules.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/schedules"
+      ],
+      "identity": "host-qualified schedule UUID",
+      "update": "Update timing/zone/action/enabled state in place with generation checks",
+      "readiness": "Stored validated schedule with next-run observation",
+      "removal": "Disable and delete schedule; preserve VM and run history policy"
+    },
+    {
+      "id": "secret",
+      "scope": "host",
+      "dependsOn": [],
+      "configuration": "Metadata, write-only value input and rotation version; retain or explicitly delete the exact owned secret",
+      "source": "public-docs/guides/secrets.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/secrets"
+      ],
+      "identity": "host-qualified secret UUID",
+      "update": "Metadata in place; write-only value rotation requires changed version marker",
+      "readiness": "Saved version available; dependent rotation outcome reported",
+      "removal": "Retain by default; explicit deletion blocked while referenced"
+    },
+    {
+      "id": "secret_connection",
+      "scope": "host",
+      "dependsOn": [
+        "auth"
+      ],
+      "configuration": "External secret-store connection and mapping configuration; do not replay one-shot transfers",
+      "source": "public-docs/guides/secrets.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/secrets/connections",
+        "/api/secrets/plans"
+      ],
+      "identity": "connection UUID",
+      "update": "Settings in place or replacement if identity changes; never replay transfer plan",
+      "readiness": "Saved provider connection with validated access",
+      "removal": "Disconnect only; preserve source and destination secret values"
+    },
+    {
+      "id": "auth",
+      "scope": "host",
+      "dependsOn": [],
+      "configuration": "AWS/GitHub/Firecrab account connection metadata and write-only credential input or existing verified reference",
+      "source": "public-docs/guides/pipe-auth.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/auth"
+      ],
+      "identity": "provider and verified account identity",
+      "update": "Credential rotation in place; account switch is explicit replacement",
+      "readiness": "Existing provider verification succeeds",
+      "removal": "Disconnect only when no dependent references; preserve external account"
+    },
+    {
+      "id": "registry",
+      "scope": "host",
+      "dependsOn": [
+        "auth"
+      ],
+      "configuration": "Registry/account/endpoint and write-only login or shared Auth reference",
+      "source": "public-docs/guides/pipe-registry.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/registries",
+        "/api/pipe/registry-images",
+        "/api/pipe/registry-tags",
+        "/api/pipe/registry-transfers",
+        "/api/microregistry"
+      ],
+      "identity": "canonical registry and account",
+      "update": "Rotate login in place; endpoint/account change is explicit replacement",
+      "readiness": "Authenticated registry access or valid shared Auth reference",
+      "removal": "Remove saved login only; keep images and external repository"
+    },
+    {
+      "id": "service",
+      "scope": "host",
+      "dependsOn": [
+        "network",
+        "security_group",
+        "secret",
+        "queue",
+        "storage_connection",
+        "registry"
+      ],
+      "configuration": "Complete MicroService spec, immutable image, bindings, placement, health and desired running/stopped state",
+      "source": "public-docs/guides/microservices.md",
+      "stack": "partial",
+      "terraform": "experimental",
+      "apiNamespaces": [
+        "/api/micro-services",
+        "/api/ci/services"
+      ],
+      "identity": "host-qualified service UUID",
+      "update": "Supported updates through Deploy; preserve stable route/name and current release until health",
+      "readiness": "Accepted release healthy and routed, or confirmed stopped",
+      "removal": "Stop/drain own replicas then remove config; preserve external application data"
+    },
+    {
+      "id": "service_auto_deploy",
+      "scope": "host",
+      "dependsOn": [
+        "service",
+        "registry"
+      ],
+      "configuration": "Tag watch policy, enabled/paused state and explicit image-writer delegation",
+      "source": "public-docs/guides/deploy.md",
+      "stack": "partial",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/micro-services/{id}/auto-deploy"
+      ],
+      "identity": "parent service UUID",
+      "update": "Policy/pause fields in place; image writer explicitly delegated",
+      "readiness": "Saved watcher policy with ownership and pause status",
+      "removal": "Disable watcher; preserve active release"
+    },
+    {
+      "id": "service_otlp",
+      "scope": "host",
+      "dependsOn": [
+        "service",
+        "secret"
+      ],
+      "configuration": "Exporter endpoint, enabled state, headers through secret references and telemetry policy",
+      "source": "public-docs/guides/otlp.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/micro-services/{id}/observability"
+      ],
+      "identity": "parent service UUID",
+      "update": "Exporter policy/credential-version changes in place",
+      "readiness": "Saved validated exporter configuration; delivery failure observable",
+      "removal": "Disable exporter; preserve application runtime"
+    },
+    {
+      "id": "service_deploy_token",
+      "scope": "host",
+      "dependsOn": [
+        "service"
+      ],
+      "configuration": "Token scope, expiry, rotation version and write-only delivery; creation is not repeated on refresh",
+      "source": "public-docs/guides/ci-deploy.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/micro-services/{id}/deploy-tokens"
+      ],
+      "identity": "service UUID and token UUID",
+      "update": "Scope/expiry/rotation changes revoke and replace token explicitly",
+      "readiness": "Token issued and delivered securely without plaintext readback",
+      "removal": "Revoke exact token; preserve service and unrelated tokens"
+    },
+    {
+      "id": "ingress",
+      "scope": "host",
+      "dependsOn": [
+        "vm",
+        "service",
+        "pool"
+      ],
+      "configuration": "Listen settings, domain/path routes, app references and desired unit state; preserve other owners' routes",
+      "source": "public-docs/guides/pipe.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "=/api/pipe",
+        "=/api/pipe/disable",
+        "=/api/pipe/service"
+      ],
+      "identity": "host and route/listener ownership key",
+      "update": "Apply only owned route/listener generations; conflict on shared owner changes",
+      "readiness": "Matching Nginx generation and unit readiness",
+      "removal": "Remove owned routes only; keep borrowed listeners and routes"
+    },
+    {
+      "id": "quick_tunnel",
+      "scope": "host",
+      "dependsOn": [
+        "ingress",
+        "vm"
+      ],
+      "configuration": "Saved target and desired connector state; generated URL is an observed output",
+      "source": "public-docs/guides/pipe.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/quick-tunnel",
+        "/api/pipe/quick-tunnels"
+      ],
+      "identity": "saved tunnel UUID",
+      "update": "Target edits in place if supported; replacement otherwise",
+      "readiness": "Saved connector ready with observed generated URL",
+      "removal": "Stop/delete exact connector; keep upstream resources"
+    },
+    {
+      "id": "named_tunnel",
+      "scope": "host",
+      "dependsOn": [
+        "ingress"
+      ],
+      "configuration": "Zone/domain/route binding, credential input and connector state within the existing Cloudflare integration",
+      "source": "public-docs/guides/public-addresses.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/cloudflare"
+      ],
+      "identity": "zone, tunnel and domain binding",
+      "update": "Saved binding in place or explicit identity replacement",
+      "readiness": "Verified existing integration's connector/DNS status",
+      "removal": "Disconnect owned integration objects only; no whole-zone deletion"
+    },
+    {
+      "id": "firecrab_tunnel",
+      "scope": "host",
+      "dependsOn": [
+        "ingress",
+        "vm",
+        "auth"
+      ],
+      "configuration": "Saved fixed-address target, account/token reference, connector state and explicit remote retirement policy",
+      "source": "public-docs/guides/firecrab-tunnel.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/firecrab-tunnels"
+      ],
+      "identity": "account and fixed-address identity",
+      "update": "Retarget with existing token/protocol rules",
+      "readiness": "Connector and fixed-address verification reported separately",
+      "removal": "Stop local connector; remote retirement requires explicit policy"
+    },
+    {
+      "id": "database_connection",
+      "scope": "host",
+      "dependsOn": [
+        "auth",
+        "secret"
+      ],
+      "configuration": "Provider, endpoint/database, verified TLS and write-only login; manage the saved connection, not an external RDS/Supabase instance",
+      "source": "public-docs/guides/pipe-databases.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/databases"
+      ],
+      "identity": "connection UUID",
+      "update": "Credential/config replacement through existing API with version checks",
+      "readiness": "Verified connection/TLS and declared access capability",
+      "removal": "Disconnect config; retain database, rows and user-owned backups"
+    },
+    {
+      "id": "database_binding",
+      "scope": "host",
+      "dependsOn": [
+        "database_connection",
+        "service"
+      ],
+      "configuration": "Service/database association, role and access policy; retain external database data",
+      "source": "firecrab-api/src/handlers/pipe_database_bindings.rs",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/database-bindings",
+        "/api/pipe/databases/{id}/bindings"
+      ],
+      "identity": "binding UUID and service/database identities",
+      "update": "Role/access changes follow existing API; recreate generated account only explicitly",
+      "readiness": "Binding provisioning and required access verified",
+      "removal": "Remove only binding-owned account/credentials according to policy; retain DB data"
+    },
+    {
+      "id": "database_events",
+      "scope": "host",
+      "dependsOn": [
+        "database_connection",
+        "database_rabbitmq"
+      ],
+      "configuration": "Saved trigger/change-delivery spec and enabled state; event acknowledgements/replay are explicit operations",
+      "source": "firecrab-api/src/handlers/pipe_database_events.rs",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/database-triggers",
+        "/api/pipe/databases/{id}/triggers"
+      ],
+      "identity": "database-qualified trigger UUID",
+      "update": "Pause/configuration changes through controller; identity changes replace",
+      "readiness": "Trigger and delivery configuration active or confirmed paused",
+      "removal": "Detach owned triggers; preserve source rows and undelivered-event evidence"
+    },
+    {
+      "id": "database_rabbitmq",
+      "scope": "host",
+      "dependsOn": [
+        "queue_engine",
+        "auth"
+      ],
+      "configuration": "External or managed RabbitMQ delivery configuration with credential references",
+      "source": "firecrab-api/src/handlers/pipe_database_events.rs",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/database-rabbitmq"
+      ],
+      "identity": "host singleton or managed-engine identity",
+      "update": "Connection metadata in place; engine replacement requires data policy",
+      "readiness": "Verified RabbitMQ transport and configured delivery engine",
+      "removal": "Disconnect external broker; retain managed broker data unless authorized"
+    },
+    {
+      "id": "database_migration",
+      "scope": "host",
+      "dependsOn": [
+        "database_connection"
+      ],
+      "configuration": "Versioned migration definition and checksum; explicit apply and no automatic replay/rollback of SQL",
+      "source": "firecrab-api/src/handlers/pipe_database_maintenance.rs",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/database-maintenance",
+        "/api/pipe/database-jobs",
+        "/api/pipe/databases/{id}/jobs",
+        "/api/pipe/databases/{id}/backups",
+        "/api/pipe/databases/{id}/migrations",
+        "/api/pipe/databases/{id}/restore"
+      ],
+      "identity": "database UUID, version and checksum",
+      "update": "Immutable migration record; changed checksum/version is explicit new operation",
+      "readiness": "Exact recorded execution outcome; no replay on refresh",
+      "removal": "Retain execution history and schema; no implicit reverse SQL"
+    },
+    {
+      "id": "storage_connection",
+      "scope": "host",
+      "dependsOn": [
+        "auth",
+        "secret"
+      ],
+      "configuration": "Existing S3 bucket/region/prefix and credential reference; disconnection must retain bucket contents",
+      "source": "public-docs/guides/pipe-storage.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/storage"
+      ],
+      "identity": "connection UUID",
+      "update": "Bucket/prefix/account identity changes explicit; mutable metadata in place",
+      "readiness": "Verified bucket access and credential reference",
+      "removal": "Disconnect only; never delete external bucket or objects"
+    },
+    {
+      "id": "queue_engine",
+      "scope": "host",
+      "dependsOn": [
+        "image",
+        "network",
+        "storage_root"
+      ],
+      "configuration": "RabbitMQ engine spec, persistent storage and desired running/stopped state",
+      "source": "public-docs/guides/queues.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/queue/engine"
+      ],
+      "identity": "host singleton and owned VM identity",
+      "update": "Follow engine spec; incompatible storage changes require replacement",
+      "readiness": "Broker healthy and desired runtime confirmed",
+      "removal": "Stop engine; retain broker disk/messages unless explicitly authorized"
+    },
+    {
+      "id": "queue",
+      "scope": "host",
+      "dependsOn": [
+        "queue_engine"
+      ],
+      "configuration": "Queue name, durability/type and settings; explicit message-data retention/deletion policy",
+      "source": "public-docs/guides/queues.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/queues"
+      ],
+      "identity": "engine-qualified queue UUID",
+      "update": "Follow broker immutability; incompatible arguments require replacement",
+      "readiness": "Broker declares intended queue and credentials",
+      "removal": "Retain queue/messages by default; explicit destructive policy for deletion"
+    },
+    {
+      "id": "ai_connection",
+      "scope": "host",
+      "dependsOn": [
+        "auth",
+        "secret"
+      ],
+      "configuration": "Provider/account/endpoint settings and noninteractive credentials or existing OAuth identity reference",
+      "source": "public-docs/guides/pipe-ai.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/ai/connections",
+        "/api/pipe/ai/logins",
+        "=/auth/callback",
+        "/api/ai-sandbox/connections",
+        "=/api/pipe/ai/responses"
+      ],
+      "identity": "provider/connection identity",
+      "update": "Saved settings and credential version in place; account switch explicit",
+      "readiness": "Existing provider/model capability verification",
+      "removal": "Disconnect connection only; preserve external account and saved conversations"
+    },
+    {
+      "id": "ai_model",
+      "scope": "host",
+      "dependsOn": [
+        "ai_connection",
+        "sandbox_project"
+      ],
+      "configuration": "Project-scoped connection/model defaults and verification requirements",
+      "source": "public-docs/guides/pipe-ai.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/pipe/ai/projects"
+      ],
+      "identity": "project UUID",
+      "update": "Connection/model selection in place with verification",
+      "readiness": "Selected model verified for required features",
+      "removal": "Remove explicit default without deleting provider connection"
+    },
+    {
+      "id": "sandbox_project",
+      "scope": "host",
+      "dependsOn": [
+        "ai_connection"
+      ],
+      "configuration": "Source identity, allowed files/skills, model defaults, coordination and runtime references",
+      "source": "public-docs/guides/ai-sandbox.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/ai-sandbox/projects",
+        "/api/ai-sandbox/tasks"
+      ],
+      "identity": "project UUID",
+      "update": "Source/allowlists/defaults in place with active-task conflict checks",
+      "readiness": "Stored source/runtime grants resolve correctly",
+      "removal": "Reject active/uncertain work; preserve borrowed source trees and results"
+    },
+    {
+      "id": "sandbox_access",
+      "scope": "host",
+      "dependsOn": [
+        "sandbox_project"
+      ],
+      "configuration": "Principal/resource/permission grants with exact host/project ownership",
+      "source": "public-docs/guides/sandbox-access.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/ai-sandbox/access"
+      ],
+      "identity": "principal and project/resource identity",
+      "update": "Replace exact grant generation; recheck active operation authority",
+      "readiness": "Saved policy matches authenticated identity",
+      "removal": "Revoke grant without deleting project or runtime"
+    },
+    {
+      "id": "sandbox_environment",
+      "scope": "host",
+      "dependsOn": [
+        "sandbox_project",
+        "image"
+      ],
+      "configuration": "Pinned role manifests, network policy, readiness, desired running/stopped state, TTL and workspace retention",
+      "source": "public-docs/guides/sandbox-environments.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/ai-sandbox/projects/{project}/environments",
+        "/api/ai-sandbox/projects/{project}/environment-images"
+      ],
+      "identity": "project and environment UUID",
+      "update": "Immutable manifest; spec changes require new UUID; runtime state mutable",
+      "readiness": "Per-role agent/network/application checks",
+      "removal": "Export/active-attempt checks; retain Workspace unless explicitly authorized"
+    },
+    {
+      "id": "sandbox_tunnel",
+      "scope": "host",
+      "dependsOn": [
+        "sandbox_project",
+        "sandbox_environment",
+        "firecrab_tunnel"
+      ],
+      "configuration": "Saved preview target, immutable execution reference, successor policy and connector state",
+      "source": "firecrab-api/src/handlers/sandbox_tunnels.rs",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/ai-sandbox/tunnels",
+        "/api/ai-sandbox/tunnel-addresses",
+        "/api/ai-sandbox/projects/{project}/tunnels"
+      ],
+      "identity": "project and preview binding UUID",
+      "update": "Immutable execution reference; explicit successor retargeting",
+      "readiness": "Local connector and public verification tracked separately",
+      "removal": "Remove own connector; explicit remote retirement; keep tasks/artifacts"
+    },
+    {
+      "id": "cluster_host",
+      "scope": "controller",
+      "dependsOn": [
+        "host_configuration"
+      ],
+      "configuration": "Enrollment endpoint, authenticated host UUID, labels/capacity configuration and draining state; heartbeat is observed, not fabricated",
+      "source": "public-docs/guides/multihost.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/cluster/hosts"
+      ],
+      "identity": "authenticated worker UUID",
+      "update": "Labels/capacity/drain via authenticated registration/management; identity change replaces",
+      "readiness": "Verified enrollment and fresh heartbeat",
+      "removal": "Drain/unregister only after owned placements clear; never stop unrelated host workloads"
+    },
+    {
+      "id": "cluster_placement",
+      "scope": "controller",
+      "dependsOn": [
+        "cluster_host",
+        "image",
+        "network",
+        "storage_root"
+      ],
+      "configuration": "Placement spec, labels, host-qualified dependencies, exact recorded owner and desired VM state",
+      "source": "public-docs/guides/multihost.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/cluster/placements",
+        "/api/cluster/worker/placements"
+      ],
+      "identity": "controller and placement UUID",
+      "update": "Follow immutable admitted spec; state operations use recorded worker",
+      "readiness": "Worker receipt and confirmed VM state",
+      "removal": "Delete through recorded owner; retain tombstone and permitted data"
+    },
+    {
+      "id": "cluster_service",
+      "scope": "controller",
+      "dependsOn": [
+        "cluster_host",
+        "network",
+        "secret",
+        "registry"
+      ],
+      "configuration": "Controller service spec, pinned credentials, per-host targets, replicas, external-state declarations and desired state",
+      "source": "firecrab-api-types/src/cluster_services.rs",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/cluster/services",
+        "/api/cluster/worker/services"
+      ],
+      "identity": "controller and service UUID",
+      "update": "Supported generations in place; existing state-mode restrictions remain",
+      "readiness": "Accepted generation healthy on required target hosts",
+      "removal": "Stop exact generation/replicas; retain shared external application data"
+    },
+    {
+      "id": "stack_source",
+      "scope": "host",
+      "dependsOn": [
+        "auth"
+      ],
+      "configuration": "Repository/ref/path, polling/sync mode, stop permissions and pause state; never create two writers for one stack",
+      "source": "public-docs/guides/stack-git-source.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/stacks/{name}/source"
+      ],
+      "identity": "stack registration UUID",
+      "update": "Generation-checked source configuration; writer transfer explicit",
+      "readiness": "Exact commit/blob validation and mode-specific observation",
+      "removal": "Remove source metadata after active work; keep bound resources"
+    },
+    {
+      "id": "management_settings",
+      "scope": "management",
+      "dependsOn": [],
+      "configuration": "microManager CPU/RAM/disk/network, autostart, port and Sleepy settings through a native management adapter",
+      "source": "public-docs/guides/micromanager-settings.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/micromanager"
+      ],
+      "identity": "local management installation identity",
+      "update": "Atomic native settings update; activation waits for idle environment",
+      "readiness": "Saved and activated native configuration; unsupported platform explicit",
+      "removal": "Release IaC ownership; never uninstall or reset a borrowed management VM"
+    },
+    {
+      "id": "host_configuration",
+      "scope": "management",
+      "dependsOn": [],
+      "configuration": "API/helper service configuration, mTLS file references and controller/worker configuration through a native management adapter",
+      "source": "public-docs/guides/operations.md",
+      "stack": "missing",
+      "terraform": "missing",
+      "apiNamespaces": [
+        "/api/update"
+      ],
+      "identity": "native host installation identity",
+      "update": "Validated service configuration with explicit restart permission",
+      "readiness": "API/helper/mTLS ready at intended endpoint",
+      "removal": "Release IaC ownership; preserve installation, PKI and workloads"
+    }
+  ],
+  "apiSources": [
+    "firecrab-api/src/server.rs",
+    "firecrab-api/src/cluster/handlers.rs",
+    "firecrab-api/src/cluster/services/handlers.rs",
+    "firecrab-api/src/handlers/sandbox_environments.rs",
+    "firecrab-api/src/handlers/sandbox_guest.rs"
+  ],
+  "baselineRoutes": [
+    "/api/ai-sandbox/access/{principal}",
+    "/api/ai-sandbox/connections/{id}/models",
+    "/api/ai-sandbox/connections/{id}/verify",
+    "/api/ai-sandbox/projects",
+    "/api/ai-sandbox/projects/{id}",
+    "/api/ai-sandbox/projects/{project}/environment-images",
+    "/api/ai-sandbox/projects/{project}/environments",
+    "/api/ai-sandbox/projects/{project}/environments/{environment}",
+    "/api/ai-sandbox/projects/{project}/environments/{environment}/export",
+    "/api/ai-sandbox/projects/{project}/environments/{environment}/reconcile",
+    "/api/ai-sandbox/projects/{project}/environments/{environment}/resume",
+    "/api/ai-sandbox/projects/{project}/environments/{environment}/stop",
+    "/api/ai-sandbox/projects/{project}/tasks",
+    "/api/ai-sandbox/projects/{project}/tasks/{id}",
+    "/api/ai-sandbox/projects/{project}/tasks/{task}/guest/health",
+    "/api/ai-sandbox/projects/{project}/tasks/{task}/guest/processes",
+    "/api/ai-sandbox/projects/{project}/tasks/{task}/guest/signal",
+    "/api/ai-sandbox/projects/{project}/tunnels",
+    "/api/ai-sandbox/projects/{project}/tunnels/{id}",
+    "/api/ai-sandbox/tasks/{id}",
+    "/api/ai-sandbox/tasks/{id}/apply",
+    "/api/ai-sandbox/tasks/{id}/artifacts/{artifact}",
+    "/api/ai-sandbox/tasks/{id}/cancel",
+    "/api/ai-sandbox/tasks/{id}/reconcile",
+    "/api/ai-sandbox/tunnel-addresses",
+    "/api/ai-sandbox/tunnels",
+    "/api/ai-sandbox/tunnels/{id}",
+    "/api/ai-sandbox/tunnels/{id}/publish",
+    "/api/ai-sandbox/tunnels/{id}/reconcile",
+    "/api/ai-sandbox/tunnels/{id}/retarget",
+    "/api/ai-sandbox/tunnels/{id}/stop",
+    "/api/ai-sandbox/tunnels/{id}/verify",
+    "/api/ci/services/{id}/deployments",
+    "/api/ci/services/{id}/deployments/{operation}",
+    "/api/cluster/hosts",
+    "/api/cluster/hosts/register",
+    "/api/cluster/hosts/{id}",
+    "/api/cluster/hosts/{id}/heartbeat",
+    "/api/cluster/placements",
+    "/api/cluster/placements/{id}",
+    "/api/cluster/placements/{id}/delete",
+    "/api/cluster/placements/{id}/reconcile",
+    "/api/cluster/placements/{id}/start",
+    "/api/cluster/placements/{id}/stop",
+    "/api/cluster/services",
+    "/api/cluster/services/{id}",
+    "/api/cluster/services/{id}/operations",
+    "/api/cluster/services/{id}/reconcile",
+    "/api/cluster/services/{id}/stop",
+    "/api/cluster/services/{id}/update",
+    "/api/cluster/worker/placements/{id}",
+    "/api/cluster/worker/services/{id}",
+    "/api/host",
+    "/api/images",
+    "/api/images/bootstrap",
+    "/api/images/bootstrap/{bootstrapId}",
+    "/api/images/{alias}",
+    "/api/images/{alias}/bootstrap",
+    "/api/images/{alias}/install",
+    "/api/images/{alias}/kernel",
+    "/api/images/{alias}/package",
+    "/api/info",
+    "/api/kernels",
+    "/api/kernels/{version}",
+    "/api/kernels/{version}/install",
+    "/api/micro-networks",
+    "/api/micro-networks/{id}",
+    "/api/micro-services",
+    "/api/micro-services/{id}",
+    "/api/micro-services/{id}/auto-deploy",
+    "/api/micro-services/{id}/auto-deploy/pause",
+    "/api/micro-services/{id}/auto-deploy/resume",
+    "/api/micro-services/{id}/deploy-tokens",
+    "/api/micro-services/{id}/deploy-tokens/{token}",
+    "/api/micro-services/{id}/deployment",
+    "/api/micro-services/{id}/deployment/check",
+    "/api/micro-services/{id}/deployment/retry",
+    "/api/micro-services/{id}/deployments/{operation_id}",
+    "/api/micro-services/{id}/deployments/{operation_id}/cancel",
+    "/api/micro-services/{id}/observability",
+    "/api/micro-services/{id}/observability/otlp",
+    "/api/micro-services/{id}/releases",
+    "/api/micro-services/{id}/rollback",
+    "/api/micro-services/{id}/stop",
+    "/api/micro-services/{id}/updates",
+    "/api/micro-storages",
+    "/api/micro-storages/{id}",
+    "/api/microblockstorage",
+    "/api/microblockstorage/{id}",
+    "/api/microblockstorage/{id}/attach",
+    "/api/microblockstorage/{id}/detach",
+    "/api/micromanager/activity",
+    "/api/microregistry",
+    "/api/microregistry/docker-hub",
+    "/api/microregistry/local/{alias}",
+    "/api/microregistry/register",
+    "/api/microregistry/register/{alias}",
+    "/api/network",
+    "/api/network/reconcile",
+    "/api/oci/import",
+    "/api/oci/import/{alias}",
+    "/api/oci/inspect",
+    "/api/pipe",
+    "/api/pipe/ai/connections",
+    "/api/pipe/ai/connections/{id}",
+    "/api/pipe/ai/connections/{id}/login",
+    "/api/pipe/ai/connections/{id}/verify",
+    "/api/pipe/ai/logins/{id}",
+    "/api/pipe/ai/projects/{id}/model",
+    "/api/pipe/ai/responses",
+    "/api/pipe/auth",
+    "/api/pipe/auth/{provider}",
+    "/api/pipe/cloudflare/connect",
+    "/api/pipe/cloudflare/disconnect",
+    "/api/pipe/cloudflare/zones",
+    "/api/pipe/database-bindings/{id}",
+    "/api/pipe/database-jobs/{id}/backup",
+    "/api/pipe/database-maintenance/tools",
+    "/api/pipe/database-rabbitmq",
+    "/api/pipe/database-rabbitmq/managed",
+    "/api/pipe/database-triggers/{id}",
+    "/api/pipe/database-triggers/{id}/acknowledge/{event}",
+    "/api/pipe/database-triggers/{id}/detach",
+    "/api/pipe/database-triggers/{id}/failures",
+    "/api/pipe/database-triggers/{id}/replay/{event}",
+    "/api/pipe/databases",
+    "/api/pipe/databases/test",
+    "/api/pipe/databases/{id}",
+    "/api/pipe/databases/{id}/access",
+    "/api/pipe/databases/{id}/backups",
+    "/api/pipe/databases/{id}/bindings",
+    "/api/pipe/databases/{id}/jobs",
+    "/api/pipe/databases/{id}/migrations",
+    "/api/pipe/databases/{id}/mutations",
+    "/api/pipe/databases/{id}/preview",
+    "/api/pipe/databases/{id}/restore",
+    "/api/pipe/databases/{id}/rows",
+    "/api/pipe/databases/{id}/tables",
+    "/api/pipe/databases/{id}/triggers",
+    "/api/pipe/disable",
+    "/api/pipe/firecrab-tunnels",
+    "/api/pipe/firecrab-tunnels/{subdomain}",
+    "/api/pipe/quick-tunnel",
+    "/api/pipe/quick-tunnels",
+    "/api/pipe/quick-tunnels/{id}",
+    "/api/pipe/quick-tunnels/{id}/service",
+    "/api/pipe/registries",
+    "/api/pipe/registries/{registry}",
+    "/api/pipe/registries/{registry}/repositories",
+    "/api/pipe/registry-images",
+    "/api/pipe/registry-tags",
+    "/api/pipe/registry-transfers",
+    "/api/pipe/registry-transfers/{id}",
+    "/api/pipe/service",
+    "/api/pipe/storage",
+    "/api/pipe/storage/{id}",
+    "/api/pipe/storage/{id}/object",
+    "/api/pipe/storage/{id}/objects",
+    "/api/pipe/storage/{id}/verify",
+    "/api/pools",
+    "/api/pools/{id}",
+    "/api/pools/{id}/acquire",
+    "/api/pools/{id}/leases",
+    "/api/pools/{id}/leases/{lease_id}",
+    "/api/queue/engine",
+    "/api/queue/engine/start",
+    "/api/queue/engine/stop",
+    "/api/queues",
+    "/api/queues/{id}",
+    "/api/queues/{id}/connection/{access}",
+    "/api/queues/{id}/metrics",
+    "/api/queues/{id}/retry",
+    "/api/schedules",
+    "/api/schedules/{id}",
+    "/api/schedules/{id}/enabled",
+    "/api/schedules/{id}/runs",
+    "/api/secrets",
+    "/api/secrets/account/preview",
+    "/api/secrets/connections",
+    "/api/secrets/connections/{id}",
+    "/api/secrets/connections/{id}/preview",
+    "/api/secrets/plans/{id}/apply",
+    "/api/secrets/{id}",
+    "/api/secrets/{id}/reveal",
+    "/api/security-groups",
+    "/api/security-groups/{id}",
+    "/api/security-groups/{id}/rules",
+    "/api/shells",
+    "/api/shells/{id}",
+    "/api/shells/{id}/revisions",
+    "/api/shells/{id}/revisions/{revision_id}",
+    "/api/stacks",
+    "/api/stacks/{name}",
+    "/api/stacks/{name}/applies/{id}",
+    "/api/stacks/{name}/apply",
+    "/api/stacks/{name}/bindings",
+    "/api/stacks/{name}/plan",
+    "/api/stacks/{name}/source",
+    "/api/stacks/{name}/source/check",
+    "/api/stacks/{name}/source/history",
+    "/api/stacks/{name}/source/sync",
+    "/api/stacks/{name}/unbind",
+    "/api/storage",
+    "/api/storage/devices",
+    "/api/update",
+    "/api/update/progress",
+    "/api/vms",
+    "/api/vms/{id}",
+    "/api/vms/{id}/log",
+    "/api/vms/{id}/pause",
+    "/api/vms/{id}/port-forwards",
+    "/api/vms/{id}/resume",
+    "/api/vms/{id}/shells",
+    "/api/vms/{id}/ssh-host-key",
+    "/api/vms/{id}/ssh-host-key/check",
+    "/api/vms/{id}/ssh-key",
+    "/api/vms/{id}/start",
+    "/api/vms/{id}/stop",
+    "/api/vms/{id}/storage",
+    "/api/{*rest}",
+    "/auth/callback",
+    "/ws/vms/{id}/console",
+    "/ws/{*rest}"
+  ],
+  "controlRoutes": {
+    "/api/info": "Read-only host/build inventory",
+    "/api/host": "Read-only host observations",
+    "/api/stacks": "IaC control-plane registration",
+    "/api/stacks/{name}": "IaC control-plane ownership",
+    "/api/stacks/{name}/plan": "IaC control-plane planning",
+    "/api/stacks/{name}/apply": "IaC control-plane execution",
+    "/api/stacks/{name}/applies/{id}": "IaC control-plane status",
+    "/api/stacks/{name}/bindings": "IaC control-plane adoption",
+    "/api/stacks/{name}/unbind": "IaC control-plane release",
+    "/api/{*rest}": "Unknown-API error route",
+    "/ws/{*rest}": "Unknown-WebSocket error route"
+  }
+}

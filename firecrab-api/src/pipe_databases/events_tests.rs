@@ -215,15 +215,42 @@ async fn durable_events_real_rabbitmq() {
             })
             .unwrap();
         state.store.save_database_rabbitmq(&rabbitmq).unwrap();
-        let axum::Json(created) = crate::handlers::pipe_database_events::create(
+        let created: Trigger = mutation_response(
+            crate::handlers::pipe_database_events::create(
+                axum::extract::State(state.clone()),
+                axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+                axum::extract::Path(record.id.to_string()),
+                axum::http::HeaderMap::new(),
+                crate::extract::ValidatedJson(trigger.input.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert!(created.installed && !created.paused);
+        let retried: Trigger = mutation_response(
+            crate::handlers::pipe_database_events::create(
+                axum::extract::State(state.clone()),
+                axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+                axum::extract::Path(record.id.to_string()),
+                axum::http::HeaderMap::new(),
+                crate::extract::ValidatedJson(trigger.input.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(retried.id, created.id);
+        assert_eq!(state.store.database_bindings().unwrap().len(), 1);
+        let mut changed = trigger.input.clone();
+        changed.path = "/events/changed".into();
+        let rejected = crate::handlers::pipe_database_events::create(
             axum::extract::State(state.clone()),
             axum::Extension(crate::server::RequestId(Uuid::new_v4())),
             axum::extract::Path(record.id.to_string()),
-            crate::extract::ValidatedJson(trigger.input.clone()),
+            axum::http::HeaderMap::new(),
+            crate::extract::ValidatedJson(changed),
         )
-        .await
-        .unwrap();
-        assert!(created.installed && !created.paused);
+        .await;
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
         install(&mut c, &trigger).await.unwrap();
         let binding = state
             .store
@@ -358,7 +385,7 @@ async fn durable_events_real_rabbitmq() {
         .await;
         let reopened = AppState::with_db_file(
             crate::templates::TemplateRegistry::load_default().unwrap(),
-            path,
+            path.clone(),
         )
         .await
         .unwrap();
@@ -476,13 +503,59 @@ async fn durable_events_real_rabbitmq() {
             &format!("INSERT INTO {qualified}(name) VALUES ('retained at detach')"),
         )
         .await;
-        let axum::Json(detached) = crate::handlers::pipe_database_events::detach(
-            axum::extract::State(state.clone()),
-            axum::Extension(crate::server::RequestId(Uuid::new_v4())),
-            axum::extract::Path(trigger.id.to_string()),
+        // A process restart after the effect checkpoint resumes the original capture,
+        // with the same source-session lock and a new execution generation.
+        let detach_id = Uuid::new_v4();
+        let crate::persistence::iac_database_events::Admission::Ready(original, true) = state
+            .store
+            .begin_database_events(
+                detach_id,
+                crate::persistence::iac_database_events::EventChange::Detach { id: trigger.id },
+            )
+            .unwrap()
+        else {
+            panic!("expected detach admission")
+        };
+        state.store.prepare_database_events(&original).unwrap();
+        state.store.checkpoint_database_events(&original).unwrap();
+        let restored = AppState::with_db_file(
+            crate::templates::TemplateRegistry::load_default().unwrap(),
+            path.clone(),
         )
         .await
         .unwrap();
+        // AppState construction alone is not an API startup. Run the same
+        // interrupted-operation checkpoint used before the production server resumes work.
+        restored.store.interrupt_native_iac_operations().unwrap();
+        let recovered = crate::handlers::pipe_database_event_mutations::recover(
+            restored,
+            crate::server::RequestId(Uuid::new_v4()),
+            detach_id,
+            original.operation.execution_generation,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            recovered.state,
+            firecrab_stack::NativeOperationState::Succeeded
+        );
+        assert_eq!(recovered.execution_generation, 1);
+        assert!(state.store.checkpoint_database_events(&original).is_err());
+        let mut detach_headers = axum::http::HeaderMap::new();
+        detach_headers.insert(
+            "x-firecrab-operation-id",
+            detach_id.to_string().parse().unwrap(),
+        );
+        let detached: Trigger = mutation_response(
+            crate::handlers::pipe_database_events::detach(
+                axum::extract::State(state.clone()),
+                axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+                axum::extract::Path(trigger.id.to_string()),
+                detach_headers,
+            )
+            .await,
+        )
+        .await;
         execute(
             &mut c,
             &format!("INSERT INTO {qualified}(name) VALUES ('after detach')"),
@@ -493,17 +566,51 @@ async fn durable_events_real_rabbitmq() {
             7
         );
         assert!(detached.detached);
+        let blocked_id = Uuid::new_v4();
+        let mut blocked_headers = axum::http::HeaderMap::new();
+        blocked_headers.insert(
+            "x-firecrab-operation-id",
+            blocked_id.to_string().parse().unwrap(),
+        );
+        let blocked = crate::handlers::pipe_database_events::delete(
+            axum::extract::State(state.clone()),
+            axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+            axum::extract::Path(trigger.id.to_string()),
+            blocked_headers,
+        )
+        .await;
+        assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            !state
+                .store
+                .database_trigger(trigger.id)
+                .unwrap()
+                .unwrap()
+                .paused
+        );
+        assert_eq!(
+            state
+                .store
+                .iac_native_operation(blocked_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            firecrab_stack::NativeOperationState::Failed
+        );
         for paused in [true, false] {
-            let axum::Json(updated) = crate::handlers::pipe_database_events::pause(
-                axum::extract::State(state.clone()),
-                axum::Extension(crate::server::RequestId(Uuid::new_v4())),
-                axum::extract::Path(trigger.id.to_string()),
-                crate::extract::ValidatedJson(
-                    serde_json::from_value(serde_json::json!({"paused":paused})).unwrap(),
-                ),
+            let updated: Trigger = mutation_response(
+                crate::handlers::pipe_database_events::pause(
+                    axum::extract::State(state.clone()),
+                    axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+                    axum::extract::Path(trigger.id.to_string()),
+                    axum::http::HeaderMap::new(),
+                    crate::extract::ValidatedJson(
+                        serde_json::from_value(serde_json::json!({"paused":paused})).unwrap(),
+                    ),
+                )
+                .await,
             )
-            .await
-            .unwrap();
+            .await;
             assert!(updated.detached);
             assert_eq!(updated.paused, paused);
         }
@@ -523,15 +630,35 @@ async fn durable_events_real_rabbitmq() {
         super::super::bindings::revoke(&record, &binding)
             .await
             .unwrap();
-        let axum::Json(deleted) = crate::handlers::pipe_database_events::delete(
-            axum::extract::State(state.clone()),
-            axum::Extension(crate::server::RequestId(Uuid::new_v4())),
-            axum::extract::Path(trigger.id.to_string()),
+        let delete_id = Uuid::new_v4();
+        let mut delete_headers = axum::http::HeaderMap::new();
+        delete_headers.insert(
+            "x-firecrab-operation-id",
+            delete_id.to_string().parse().unwrap(),
+        );
+        let deleted: serde_json::Value = mutation_response(
+            crate::handlers::pipe_database_events::delete(
+                axum::extract::State(state.clone()),
+                axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+                axum::extract::Path(trigger.id.to_string()),
+                delete_headers.clone(),
+            )
+            .await,
         )
-        .await
-        .unwrap();
+        .await;
         assert_eq!(deleted["deleted"], true);
         assert!(state.store.database_trigger(trigger.id).unwrap().is_none());
+        let retried: serde_json::Value = mutation_response(
+            crate::handlers::pipe_database_events::delete(
+                axum::extract::State(state.clone()),
+                axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+                axum::extract::Path(trigger.id.to_string()),
+                delete_headers,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(retried, deleted);
         // An old worker snapshot must not recreate a queue after removal.
         relay(&state, &record, &trigger, &client, false)
             .await
@@ -577,11 +704,12 @@ async fn event_mutations_retain_protections_without_the_short_rest_deadline() {
     let id = Uuid::new_v4();
     let input: DatabaseInput = serde_json::from_value(serde_json::json!({"name":"QA","provider":"local","uri":format!("postgresql://qa:{}@127.0.0.1:9/db",Uuid::new_v4()),"tlsMode":"disable"})).unwrap();
     state.store.save_pipe_database(id, &input).unwrap();
+    let trigger_id = Uuid::new_v4();
     let trigger = Trigger {
-        id: Uuid::new_v4(),
+        id: trigger_id,
         database_id: id,
         input: TriggerInput {
-            request_id: Uuid::new_v4(),
+            request_id: trigger_id,
             schema: "public".into(),
             table: "orders".into(),
             service_id: Uuid::new_v4(),
@@ -655,7 +783,6 @@ async fn event_mutations_retain_protections_without_the_short_rest_deadline() {
 
 #[tokio::test]
 async fn connection_updates_validate_the_target_saved_while_waiting() {
-    use axum::response::IntoResponse;
     let dir = tempfile::tempdir().unwrap();
     let state = AppState::with_db_file(
         crate::templates::TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap(),
@@ -673,6 +800,7 @@ async fn connection_updates_validate_the_target_saved_while_waiting() {
             axum::extract::State(task_state),
             axum::Extension(crate::server::RequestId(Uuid::new_v4())),
             axum::extract::Path(id.to_string()),
+            axum::http::HeaderMap::new(),
             crate::extract::ValidatedJson(input),
         )
         .await
@@ -681,13 +809,14 @@ async fn connection_updates_validate_the_target_saved_while_waiting() {
     let mut current = state.store.pipe_database(id).unwrap().unwrap().input;
     current.uri = current.uri.replace("127.0.0.1", "127.0.0.2");
     state.store.update_pipe_database(id, &current).unwrap();
+    let trigger_id = Uuid::new_v4();
     state
         .store
         .save_database_trigger(&Trigger {
-            id: Uuid::new_v4(),
+            id: trigger_id,
             database_id: id,
             input: TriggerInput {
-                request_id: Uuid::new_v4(),
+                request_id: trigger_id,
                 schema: "public".into(),
                 table: "orders".into(),
                 service_id: Uuid::new_v4(),
@@ -699,7 +828,8 @@ async fn connection_updates_validate_the_target_saved_while_waiting() {
         })
         .unwrap();
     drop(guard);
-    let response = update.await.unwrap().err().unwrap().into_response();
+    let response = update.await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = axum::body::to_bytes(response.into_body(), 65536)
         .await
         .unwrap();
@@ -711,4 +841,20 @@ async fn connection_updates_validate_the_target_saved_while_waiting() {
         state.store.pipe_database(id).unwrap().unwrap().input.uri,
         current.uri
     );
+}
+
+async fn mutation_response<T: serde::de::DeserializeOwned>(
+    response: axum::response::Response,
+) -> T {
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    serde_json::from_slice(&body).unwrap()
 }

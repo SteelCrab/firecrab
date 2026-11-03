@@ -20,6 +20,9 @@ use crate::model::{Lease, VmRecord, VmState};
 mod block_storage;
 mod cluster;
 mod cluster_services;
+mod database_broker_mutations;
+pub(crate) use database_broker_mutations::{BrokerVmGrant, BrokerWatch};
+mod database_job_claims;
 mod database_services;
 mod pools;
 mod queues;
@@ -37,6 +40,7 @@ mod pipe_auth;
 mod pipe_databases;
 mod pipe_storage;
 mod registries;
+mod sandbox_access;
 mod sandbox_environments;
 mod sandbox_tunnels;
 mod schedules;
@@ -48,6 +52,36 @@ pub(crate) mod service_observation;
 mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
+mod iac_ai_connections;
+pub(crate) mod iac_auto_deploy;
+mod iac_cluster;
+pub(crate) mod iac_database_bindings;
+pub(crate) mod iac_database_brokers;
+pub(crate) mod iac_database_events;
+mod iac_database_migrations;
+pub(crate) mod iac_database_operations;
+mod iac_database_targets;
+mod iac_dependencies;
+mod iac_deploy_tokens;
+pub(crate) mod iac_host;
+pub(crate) mod iac_images;
+pub(crate) mod iac_kernels;
+pub(crate) mod iac_managed_database_brokers;
+pub(crate) mod iac_native;
+pub(crate) mod iac_native_host;
+mod iac_native_schema;
+mod iac_operation_keys;
+mod iac_operation_queries;
+mod iac_owners;
+pub(crate) mod iac_resource_plans;
+mod iac_resources;
+mod iac_sandbox_tunnels;
+pub(crate) mod iac_vm_deletes;
+mod iac_volume_attachments;
+pub(crate) mod queue_engine_operations;
+mod vm_boot;
+mod volume_mounts;
+pub(crate) use iac_resources::TRANSFER_KINDS as IAC_TRANSFER_KINDS;
 mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
@@ -77,33 +111,34 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     last_runtime_id TEXT,
     purpose TEXT NOT NULL DEFAULT 'instance',
     env TEXT NOT NULL DEFAULT '{}',
-    security_group_id TEXT
+    security_group_id TEXT,
+    boot_pin TEXT
 ) STRICT";
 
 /// Selects every column [`Store::load_all`] needs.
 const SELECT_ALL_SQL: &str = "SELECT id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env, security_group_id FROM vms";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env, security_group_id, boot_pin FROM vms";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_SQL: &str = "INSERT INTO vms (id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env, security_group_id) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env, security_group_id, boot_pin) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)";
 
 /// Upserts a row, used only by the one-time legacy `vms.json` import.
 const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template, \
     template_version, template_kernel_sha256, template_rootfs_sha256, \
     template_boot_args_sha256, cpu, ram, disk_gb, egress_policy, micro_network_id, storage_root, \
-    disk_generation, last_runtime_id, purpose, env, security_group_id) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
+    disk_generation, last_runtime_id, purpose, env, security_group_id, boot_pin) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)";
 
 /// Replaces an existing row's columns by id.
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
     template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12, \
     micro_network_id = ?13, storage_root = ?14, disk_generation = ?15, last_runtime_id = ?16, \
-    purpose = ?17, env = ?18, security_group_id = ?19 WHERE id = ?1";
+    purpose = ?17, env = ?18, security_group_id = ?19 WHERE id = ?1 AND boot_pin IS ?20";
 
 /// Schema for the `micro_networks` table (`public-docs/guides/networking.md`).
 /// The gateway isn't stored — it's derived from `subnet_cidr` — and neither
@@ -332,6 +367,30 @@ fn migrate_disk_generation_columns(conn: &Connection) -> Result<(), PersistenceE
     Ok(())
 }
 
+/// Never infer an unrecorded initrd from the current registry during migration.
+fn migrate_boot_pin_column(conn: &Connection) -> Result<(), PersistenceError> {
+    if !conn
+        .prepare("SELECT 1 FROM pragma_table_info('vms') WHERE name='boot_pin'")?
+        .exists([])?
+    {
+        conn.execute("ALTER TABLE vms ADD COLUMN boot_pin TEXT", [])?;
+    }
+    Ok(())
+}
+
+fn decode_boot_pin(
+    id: &str,
+    raw: Option<String>,
+) -> Result<Option<firecrab_stack::TemplatePin>, PersistenceError> {
+    raw.map(|raw| {
+        serde_json::from_str(&raw).map_err(|_| PersistenceError::CorruptRecord {
+            id: id.to_owned(),
+            reason: "invalid VM boot proof".into(),
+        })
+    })
+    .transpose()
+}
+
 const ADD_ENV_COLUMN_SQL: &str = "ALTER TABLE vms ADD COLUMN env TEXT NOT NULL DEFAULT '{}'";
 
 /// Adds `env` to a `vms` table created before per-VM environment existed.
@@ -512,6 +571,42 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// A private value changed outside its last acknowledged write-only input.
+    #[error("a new private credential version or explicit value retention is required")]
+    IacCredentialVersionRequired,
+    /// An admitted resource operation still owns the current authority.
+    #[error("IaC resource operation is active")]
+    IacResourceBusy,
+    /// Generated children retain their parent controller's immutable authority.
+    #[error("resource belongs to a parent controller")]
+    IacParentManaged,
+    /// A parent cannot silently delete configuration managed by a separate resource.
+    #[error("resource has separately managed configuration")]
+    IacManagedDependent,
+    /// A failed encrypted-vault lookup cannot be treated as an absent resource.
+    #[error("IaC credential store is unavailable")]
+    IacVaultUnavailable,
+    /// The request was prepared for a different API endpoint.
+    #[error("IaC endpoint identity changed")]
+    IacEndpointConflict,
+    /// Ownership metadata is malformed or identifies an unknown resource kind.
+    #[error("invalid IaC owner request")]
+    InvalidIacOwner,
+    /// Another workflow already owns the exact resource.
+    #[error("IaC resource ownership conflicts")]
+    IacOwnershipConflict,
+    /// A release/reclaim happened after the caller observed ownership.
+    #[error("IaC ownership generation changed")]
+    StaleIacOwner,
+    /// The caller observed an older native recovery execution.
+    #[error("native execution generation changed")]
+    StaleIacExecution,
+    /// A retry UUID belongs to a different immutable ownership request.
+    #[error("IaC operation identity conflicts")]
+    IacOperationIdentity,
+    /// The resource adapter does not yet implement safe ownership transfer.
+    #[error("IaC ownership adapter is not implemented")]
+    UnsupportedIacResource,
     /// CI credentials were revoked, expired or no longer match the service/repository.
     #[error("CI Deploy authorization is no longer valid")]
     CiDeployUnauthorized,
@@ -595,7 +690,7 @@ pub enum PersistenceError {
     },
     /// A SQLite query/statement failed.
     #[error("VM database operation failed: {0}")]
-    Database(#[from] rusqlite::Error),
+    Database(#[source] rusqlite::Error),
     /// A stored row's data doesn't match what the application expects.
     #[error("VM database record {id} is invalid: {reason}")]
     CorruptRecord {
@@ -749,6 +844,16 @@ fn restrict_to_owner(path: &Path) {
     }
 }
 
+impl From<rusqlite::Error> for PersistenceError {
+    fn from(error: rusqlite::Error) -> Self {
+        if iac_operation_keys::identity_conflict(&error) {
+            Self::IacOperationIdentity
+        } else {
+            Self::Database(error)
+        }
+    }
+}
+
 impl Store {
     /// Opens (creating if needed) the database at `path`: sets WAL mode,
     /// creates/migrates the schema, and imports any legacy `vms.json` found
@@ -783,6 +888,7 @@ impl Store {
         migrate_disk_generation_columns(&conn)?;
         migrate_purpose_column(&conn)?;
         migrate_env_column(&conn)?;
+        migrate_boot_pin_column(&conn)?;
         security_groups::migrate(&conn)?;
         conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
         migrate_lease_ipv6_column(&conn)?;
@@ -804,6 +910,7 @@ impl Store {
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(database_services::CREATE_SQL)?;
         conn.execute(pipe_ai::CONNECTIONS_SQL, [])?;
+        iac_ai_connections::initialize(&conn)?;
         conn.execute(pipe_ai::DEFAULTS_SQL, [])?;
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
@@ -827,7 +934,21 @@ impl Store {
         conn.execute_batch(stacks::SCHEMA_SQL)?;
         conn.execute_batch(stack_applies::SCHEMA_SQL)?;
         conn.execute_batch(queues::SCHEMA)?;
+        conn.execute_batch(queue_engine_operations::SCHEMA)?;
         conn.execute_batch(stack_sources::SCHEMA_SQL)?;
+        iac_owners::initialize(&conn)?;
+        conn.execute_batch(iac_host::SCHEMA)?;
+        iac_native_host::initialize(&conn)?;
+        iac_native_schema::initialize(&conn)?;
+        conn.execute_batch(vm_boot::SCHEMA)?;
+        conn.execute_batch(iac_database_targets::SCHEMA)?;
+        conn.execute_batch(iac_database_operations::SCHEMA)?;
+        conn.execute_batch(iac_database_bindings::SCHEMA)?;
+        conn.execute_batch(iac_database_events::SCHEMA)?;
+        conn.execute_batch(iac_database_brokers::SCHEMA)?;
+        conn.execute_batch(iac_managed_database_brokers::SCHEMA)?;
+        conn.execute_batch(iac_kernels::SCHEMA)?;
+        iac_vm_deletes::initialize(&conn)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;
@@ -845,8 +966,10 @@ impl Store {
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
         pools::create_tables(&conn)?;
+        conn.execute_batch(iac_images::SCHEMA)?;
         conn.execute_batch(cluster::SCHEMA)?;
         conn.execute_batch(cluster_services::SCHEMA)?;
+        iac_operation_keys::initialize(&conn)?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;
@@ -885,6 +1008,7 @@ impl Store {
                     template_kernel_sha256: row.get(5)?,
                     template_rootfs_sha256: row.get(6)?,
                     template_boot_args_sha256: row.get(7)?,
+                    boot_pin: decode_boot_pin(&id_text, row.get(19)?)?,
                     cpu: row.get(8)?,
                     ram: row.get(9)?,
                     disk_gb: row.get(10)?,
@@ -909,26 +1033,46 @@ impl Store {
 
     /// Inserts a new VM record.
     pub fn insert(&self, vm: &VmRecord) -> Result<(), PersistenceError> {
-        execute_record(&self.lock(), INSERT_SQL, vm)?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        database_broker_mutations::ensure_vm_unreserved(&tx, vm.id)?;
+        iac_vm_deletes::ensure_available(&tx, vm.id)?;
+        iac_native::ensure_idle(&tx, &iac_images::resource(&vm.template))?;
+        execute_record(&tx, INSERT_SQL, vm)?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Replaces an existing VM record's columns.
     pub fn update(&self, vm: &VmRecord) -> Result<(), PersistenceError> {
-        if execute_record(&self.lock(), UPDATE_SQL, vm)? == 0 {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        iac_native::ensure_idle(&tx, &iac_vm_deletes::resource(vm.id))?;
+        if execute_record(&tx, UPDATE_SQL, vm)? == 0 {
+            if tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM vms WHERE id=?1)",
+                [vm.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )? {
+                return Err(PersistenceError::StaleIacExecution);
+            }
             return Err(PersistenceError::MissingVm { id: vm.id });
         }
+        tx.commit()?;
         Ok(())
     }
 
     /// Deletes a VM record by id.
     pub fn delete(&self, id: Uuid) -> Result<(), PersistenceError> {
-        let changed = self
-            .lock()
-            .execute("DELETE FROM vms WHERE id = ?1", params![id.to_string()])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        iac_native::ensure_idle(&tx, &iac_vm_deletes::resource(id))?;
+        iac_volume_attachments::ensure_vm_deletable(&tx, id)?;
+        let changed = tx.execute("DELETE FROM vms WHERE id = ?1", params![id.to_string()])?;
         if changed == 0 {
             return Err(PersistenceError::MissingVm { id });
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1164,14 +1308,37 @@ impl Store {
         username: &str,
         secret: &str,
     ) -> Result<(), PersistenceError> {
-        self.lock()
-            .execute(UPSERT_DOCKER_HUB_CREDENTIAL_SQL, params![username, secret])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "registry".into(),
+                id: "docker.io".into(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        tx.execute(UPSERT_DOCKER_HUB_CREDENTIAL_SQL, params![username, secret])?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Forgets the stored Docker Hub login.
     pub fn delete_docker_hub_credential(&self) -> Result<(), PersistenceError> {
-        self.lock().execute(DELETE_DOCKER_HUB_CREDENTIAL_SQL, [])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "registry".into(),
+                id: "docker.io".into(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        tx.execute(DELETE_DOCKER_HUB_CREDENTIAL_SQL, [])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1315,6 +1482,15 @@ impl Store {
     ) -> Result<u32, PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "shell".into(),
+                id: shell_id.to_string(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
         let exists: bool = tx
             .prepare("SELECT 1 FROM shells WHERE id = ?1")?
             .exists(params![shell_id.to_string()])?;
@@ -1496,6 +1672,15 @@ impl Store {
     pub fn delete_shell(&self, id: Uuid) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "shell".into(),
+                id: id.to_string(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
         let exists: bool = tx
             .prepare("SELECT 1 FROM shells WHERE id = ?1")?
             .exists(params![id.to_string()])?;
@@ -1778,6 +1963,8 @@ impl Store {
     pub fn allocate_lease(&self, vm_id: Uuid, subnet: SubnetSpec) -> Result<Lease, IpamError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        iac_vm_deletes::ensure_available(&tx, vm_id)
+            .map_err(|_| IpamError::VmUnavailable { vm_id })?;
         let lease = ipam::allocate(&tx, vm_id, subnet)?;
         tx.commit()?;
         Ok(lease)
@@ -1795,6 +1982,8 @@ impl Store {
     ) -> Result<Lease, IpamError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        iac_vm_deletes::ensure_available(&tx, vm_id)
+            .map_err(|_| IpamError::VmUnavailable { vm_id })?;
         let lease = ipam::rotate(&tx, vm_id, subnet, unavailable_ipv4s)?;
         tx.commit()?;
         Ok(lease)
@@ -1940,6 +2129,11 @@ fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, 
             vm.purpose.id(),
             encode_env(&vm.env),
             vm.security_group_id.map(|id| id.to_string()),
+            vm.boot_pin
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .expect("serializable boot pin"),
         ],
     )
 }
@@ -2057,6 +2251,7 @@ mod tests {
             template_kernel_sha256: "kernel".to_owned(),
             template_rootfs_sha256: "rootfs".to_owned(),
             template_boot_args_sha256: "args".to_owned(),
+            boot_pin: None,
             cpu: 1,
             ram: 512,
             disk_gb: 2,

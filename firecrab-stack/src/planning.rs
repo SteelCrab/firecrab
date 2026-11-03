@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    Diagnostic, PlanInputs, Stack, TemplateSnapshot, diagnostic, logical_name, subnet, validate,
+    Diagnostic, PlanInputs, SecretInputPin, Stack, TemplateSnapshot, diagnostic, logical_name,
+    subnet, validate,
 };
 
 /// Resource namespaces shared by ownership records, CLI arguments and plans.
@@ -155,6 +156,10 @@ pub struct Inventory {
     pub vms: Vec<VmSnapshot>,
     /// Saved services and their latest deployment snapshots.
     pub services: Vec<ServiceSnapshot>,
+    /// Referenced Secret metadata read under the vault lock; values are excluded.
+    pub secret_inputs: BTreeMap<Uuid, SecretInputPin>,
+    /// Original credential references of known deployment snapshots, excluding values.
+    pub deployment_secret_inputs: BTreeMap<Uuid, BTreeMap<String, SecretInputPin>>,
 }
 
 /// Advisory configuration action. None of these actions executes a mutation.
@@ -272,6 +277,26 @@ pub fn plan(
                 "invalid or conflicting ownership metadata",
             )]);
         }
+    }
+    let mut errors = Vec::new();
+    for (key, service) in &stack.micro_services {
+        for (name, id) in &service.config.secrets {
+            if !inventory.secret_inputs.get(id).is_some_and(|pin| {
+                pin.id == *id
+                    && pin.version > 0
+                    && pin.ownership.resource.kind == "secret"
+                    && pin.ownership.resource.id == id.to_string()
+                    && !pin.ownership.endpoint_id.is_nil()
+            }) {
+                errors.push(diagnostic(
+                    &format!("microServices.{key}.config.secrets.{name}"),
+                    "requires an available exact Secret version and ownership observation",
+                ));
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
     }
     let inputs = resolved_inputs(stack, record, inventory);
     let mut changes = Vec::new();
@@ -443,6 +468,21 @@ pub fn plan(
                 );
             }
             let deployed = current.deployment.as_ref();
+            if !config.secrets.is_empty() {
+                let versions = |pins: Option<&BTreeMap<String, SecretInputPin>>| {
+                    pins.map(|pins| {
+                        pins.iter()
+                            .map(|(name, pin)| (name.clone(), pin.id, pin.version))
+                            .collect::<Vec<_>>()
+                    })
+                };
+                difference(
+                    &mut change,
+                    "secretVersions",
+                    versions(inputs.service_secrets.get(key))
+                        != versions(inputs.service_secret_releases.get(key)),
+                );
+            }
             difference(
                 &mut change,
                 "deployment",
@@ -639,6 +679,52 @@ fn resolved_inputs(stack: &Stack, record: &StackRecord, inventory: &Inventory) -
                     .image
                     .split_once('@')
                     .map(|(_, digest)| (key.clone(), digest.to_ascii_lowercase()))
+            })
+            .collect(),
+        service_secrets: stack
+            .micro_services
+            .iter()
+            .filter(|(_, service)| !service.config.secrets.is_empty())
+            .map(|(key, service)| {
+                (
+                    key.clone(),
+                    service
+                        .config
+                        .secrets
+                        .iter()
+                        .filter_map(|(name, id)| {
+                            inventory
+                                .secret_inputs
+                                .get(id)
+                                .cloned()
+                                .map(|pin| (name.clone(), pin))
+                        })
+                        .collect(),
+                )
+            })
+            .collect(),
+        service_secret_releases: record
+            .bindings
+            .iter()
+            .filter(|binding| {
+                binding.kind == ResourceKind::Service
+                    && stack
+                        .micro_services
+                        .get(&binding.key)
+                        .is_some_and(|service| !service.config.secrets.is_empty())
+            })
+            .filter_map(|binding| {
+                let deployment = inventory
+                    .services
+                    .iter()
+                    .find(|service| service.service.id == binding.resource_id)?
+                    .deployment
+                    .as_ref()?;
+                inventory
+                    .deployment_secret_inputs
+                    .get(&deployment.id)
+                    .cloned()
+                    .map(|pins| (binding.key.clone(), pins))
             })
             .collect(),
     }

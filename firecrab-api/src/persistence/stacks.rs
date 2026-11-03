@@ -25,7 +25,72 @@ CREATE TABLE IF NOT EXISTS stack_bindings (
     UNIQUE (kind, resource_id)
 ) STRICT;";
 
+/// The same writer fence is checked in HTTP preflight and the actual SQLite commit.
+pub(super) fn service_mutation_allowed(
+    conn: &Connection,
+    service: Uuid,
+    operation: Option<Uuid>,
+) -> Result<bool, PersistenceError> {
+    super::iac_native::ensure_idle(
+        conn,
+        &firecrab_stack::ManagedResource {
+            kind: "service".into(),
+            id: service.to_string(),
+        },
+    )?;
+    if super::iac_owners::terraform_owned(conn, "service", service)? {
+        return Ok(false);
+    }
+    let owner: Option<String> = conn
+        .query_row(
+            "SELECT stack_id FROM stack_bindings WHERE kind='service' AND resource_id=?1",
+            [service.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(owner) = owner else {
+        return Ok(operation.is_none());
+    };
+    let git: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM stack_git_sources WHERE stack_id=?1)",
+        [&owner],
+        |r| r.get(0),
+    )?;
+    let active: Option<String> = conn
+        .query_row(
+            "SELECT status FROM stack_applies WHERE stack_id=?1 AND state IN ('queued','running')",
+            [&owner],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if !git && active.is_none() {
+        return Ok(operation.is_none());
+    }
+    let Some(active) = active else {
+        return Ok(false);
+    };
+    let status: firecrab_stack::ApplyStatus =
+        serde_json::from_str(&active).map_err(|_| PersistenceError::StackApplyIdentity)?;
+    Ok(operation == Some(status.operation_id)
+        && status.changes.iter().any(|step| {
+            step.change.kind == ResourceKind::Service
+                && step.change.resource_id == Some(service)
+                && step.state == firecrab_stack::StepState::Running
+        }))
+}
+
 impl Store {
+    /// Active applies protect existing bindings and prospective replacement IDs.
+    /// Terminal reservations stay inspectable but must not block later edits.
+    #[cfg(test)]
+    pub(crate) fn stack_resource_apply_busy(
+        &self,
+        kind: ResourceKind,
+        resource: Uuid,
+    ) -> Result<bool, PersistenceError> {
+        resource_apply_busy(&self.lock(), kind, resource)
+    }
+
     /// Recover the newest accepted content pin for this exact bound VM UUID.
     /// This also protects later manual starts and API restart recovery.
     /// Inventory excludes pending updates so admission itself does not create drift.
@@ -72,48 +137,7 @@ impl Store {
         service: Uuid,
         operation: Option<Uuid>,
     ) -> Result<bool, PersistenceError> {
-        let conn = self.lock();
-        let owner: Option<String> = conn
-            .query_row(
-                "SELECT stack_id FROM stack_bindings WHERE kind='service' AND resource_id=?1",
-                [service.to_string()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let Some(owner) = owner else {
-            return Ok(true);
-        };
-        let git: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM stack_git_sources WHERE stack_id=?1)",
-            [&owner],
-            |r| r.get(0),
-        )?;
-        let active: Option<String> = conn.query_row(
-            "SELECT status FROM stack_applies WHERE stack_id=?1 AND state IN ('queued','running')",
-            [&owner], |r| r.get(0),
-        ).optional()?;
-        if !git && active.is_none() {
-            return Ok(true);
-        }
-        let Some(active) = active else {
-            return Ok(false);
-        };
-        let status: firecrab_stack::ApplyStatus =
-            serde_json::from_str(&active).map_err(|_| PersistenceError::StackApplyIdentity)?;
-        Ok(operation == Some(status.operation_id)
-            && status.changes.iter().any(|step| {
-                step.change.kind == ResourceKind::Service
-                    && step.change.resource_id == Some(service)
-                    && step.state == firecrab_stack::StepState::Running
-            }))
-    }
-
-    /// The current opt-in policy authorizes only image automation, never concurrent Stack work.
-    pub(crate) fn stack_service_auto_allowed(
-        &self,
-        service: Uuid,
-    ) -> Result<bool, PersistenceError> {
-        Ok(!self.lock().query_row("SELECT EXISTS(SELECT 1 FROM stack_applies a JOIN stack_bindings b ON a.stack_id=b.stack_id WHERE b.kind='service' AND b.resource_id=?1 AND a.state IN ('queued','running'))", [service.to_string()], |r| r.get::<_, bool>(0))?)
+        service_mutation_allowed(&self.lock(), service, operation)
     }
 
     /// Delete empty metadata atomically. Never release bindings or delete host resources.
@@ -129,7 +153,12 @@ impl Store {
         }
         super::stack_applies::ensure_idle(&tx, stack.id)?;
         super::stack_sources::ensure_idle(&tx, stack.id)?;
-        if !stack.bindings.is_empty() {
+        super::iac_native::ensure_stack_idle(&tx, stack.id)?;
+        let configuration_owned: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM iac_resource_owners WHERE manager='stack' AND owner_id=?1)",
+            [id.to_string()], |row|row.get(0),
+        )?;
+        if !stack.bindings.is_empty() || configuration_owned {
             return Err(PersistenceError::StackNotEmpty);
         }
         tx.execute(
@@ -215,10 +244,12 @@ impl Store {
             return Ok(stack);
         }
         super::stack_applies::ensure_idle(&tx, stack.id)?;
-        if stack.bindings.len() >= firecrab_stack::MAX_RESOURCES {
+        if binding_count(&tx, stack.id, None)? >= firecrab_stack::MAX_RESOURCES {
             return Err(PersistenceError::StackBindingLimit);
         }
         validate_resource(&tx, binding)?;
+        super::stack_sources::ensure_idle(&tx, stack.id)?;
+        super::iac_owners::ensure_resource_idle(&tx, binding.kind, binding.resource_id)?;
         let owner: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM stack_bindings WHERE kind = ?1 AND resource_id = ?2)",
             params![binding.kind.as_str(), binding.resource_id.to_string()],
@@ -227,6 +258,7 @@ impl Store {
         if owner {
             return Err(PersistenceError::StackConflict);
         }
+        super::iac_owners::native_binding_changed(&tx, binding.kind.as_str(), binding.resource_id)?;
         tx.execute("INSERT INTO stack_bindings (stack_id, kind, logical_key, resource_id) VALUES (?1, ?2, ?3, ?4)", params![stack.id.to_string(), binding.kind.as_str(), binding.key, binding.resource_id.to_string()])?;
         tx.execute(
             "UPDATE stacks SET revision = revision + 1 WHERE id = ?1",
@@ -261,6 +293,9 @@ impl Store {
             return Err(PersistenceError::StackConflict);
         }
         super::stack_applies::ensure_idle(&tx, stack.id)?;
+        super::stack_sources::ensure_idle(&tx, stack.id)?;
+        super::iac_owners::ensure_resource_idle(&tx, binding.kind, binding.resource_id)?;
+        super::iac_owners::native_binding_changed(&tx, binding.kind.as_str(), binding.resource_id)?;
         tx.execute("DELETE FROM stack_bindings WHERE stack_id = ?1 AND kind = ?2 AND logical_key = ?3 AND resource_id = ?4", params![stack.id.to_string(), binding.kind.as_str(), binding.key, binding.resource_id.to_string()])?;
         tx.execute(
             "UPDATE stacks SET revision = revision + 1 WHERE id = ?1",
@@ -270,6 +305,24 @@ impl Store {
         tx.commit()?;
         Ok(updated)
     }
+}
+
+pub(super) fn resource_apply_busy(
+    conn: &Connection,
+    kind: ResourceKind,
+    resource: Uuid,
+) -> Result<bool, PersistenceError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM stack_applies a
+             WHERE a.state IN ('queued','running') AND (
+                 EXISTS(SELECT 1 FROM stack_bindings b
+                        WHERE b.stack_id=a.stack_id AND b.kind=?1 AND b.resource_id=?2)
+                 OR EXISTS(SELECT 1 FROM stack_apply_reservations r
+                           WHERE r.operation_id=a.operation_id AND r.kind=?1 AND r.resource_id=?2)
+             ))",
+        params![kind.as_str(), resource.to_string()],
+        |row| row.get(0),
+    )?)
 }
 
 pub(super) fn read_stack(
@@ -317,6 +370,21 @@ pub(super) fn read_stack(
     }))
 }
 
+/// Account for every owned kind, including retained resources outside the legacy manifest.
+pub(super) fn binding_count(
+    conn: &Connection,
+    stack: Uuid,
+    excluding: Option<&firecrab_stack::ManagedResource>,
+) -> Result<usize, PersistenceError> {
+    let count: i64 = conn.query_row(
+        "SELECT (SELECT count(*) FROM stack_bindings WHERE stack_id=?1 AND (?2 IS NULL OR kind<>?2 OR resource_id<>?3))
+         + (SELECT count(*) FROM iac_resource_owners WHERE manager='stack' AND owner_id=?1 AND (?2 IS NULL OR kind<>?2 OR resource_id<>?3))",
+        params![stack.to_string(), excluding.map(|resource|resource.kind.as_str()), excluding.map(|resource|resource.id.as_str())],
+        |row|row.get(0),
+    )?;
+    usize::try_from(count).map_err(|_| PersistenceError::StackBindingLimit)
+}
+
 fn uuid(value: &str) -> Result<Uuid, PersistenceError> {
     Uuid::parse_str(value)
         .ok()
@@ -335,6 +403,13 @@ pub(super) fn validate_resource(
     conn: &Connection,
     binding: &Binding,
 ) -> Result<(), PersistenceError> {
+    super::iac_resources::ensure_independent(
+        conn,
+        &firecrab_stack::ManagedResource {
+            kind: binding.kind.as_str().into(),
+            id: binding.resource_id.to_string(),
+        },
+    )?;
     let id = binding.resource_id.to_string();
     let query = match binding.kind {
         ResourceKind::Network => "SELECT EXISTS(SELECT 1 FROM micro_networks WHERE id = ?1)",

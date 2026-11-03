@@ -35,6 +35,13 @@ pub enum Kind {
     Restore,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParentJob {
+    pub id: Uuid,
+    pub execution_generation: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 /// Private durable job state and verified backup metadata.
@@ -47,6 +54,12 @@ pub struct Job {
     pub kind: Kind,
     /// Durable queue, completion or recovery state.
     pub status: String,
+    /// Monotonic claim fence, independent of the caller's retry UUID.
+    #[serde(default)]
+    pub execution_generation: u64,
+    /// Server-created safety snapshots retain their original parent attempt.
+    #[serde(default)]
+    pub parent: Option<ParentJob>,
     /// Creation time as UTC Unix seconds.
     pub created_at: i64,
     /// Successful snapshot selected for a restore.
@@ -91,6 +104,8 @@ impl Job {
             database_id: record.id,
             kind,
             status: "queued".into(),
+            execution_generation: 0,
+            parent: None,
             created_at: chrono::Utc::now().timestamp(),
             backup_id: None,
             version: None,
@@ -108,7 +123,7 @@ impl Job {
     }
     /// Return public metadata without credentials or private SQL.
     pub fn summary(&self) -> serde_json::Value {
-        serde_json::json!({"id":self.id,"databaseId":self.database_id,"kind":self.kind,"status":self.status,"createdAt":self.created_at,"backupId":self.backup_id,"safetyBackupId":self.safety_backup_id,"version":self.version,"checksum":self.checksum,"bytes":self.bytes,"error":self.error})
+        serde_json::json!({"id":self.id,"databaseId":self.database_id,"kind":self.kind,"status":self.status,"executionGeneration":self.execution_generation,"retryable":self.kind==Kind::Migration && self.status=="failed" && !self.maintenance_started,"createdAt":self.created_at,"backupId":self.backup_id,"safetyBackupId":self.safety_backup_id,"version":self.version,"versionChecksum":self.sql.as_ref().filter(|_|self.kind==Kind::Migration).map(|sql|format!("{:x}",Sha256::digest(sql.as_bytes()))),"checksum":self.checksum,"bytes":self.bytes,"error":self.error})
     }
 }
 /// Hash engine, endpoint and database so credentials can rotate independently.
@@ -126,6 +141,13 @@ pub(crate) fn target_hash(record: &DatabaseRecord) -> Result<String, Error> {
         )
     ))
 }
+fn redacted_error(error: &Error) -> String {
+    match error {
+        Error::Invalid(message) => (*message).into(),
+        _ => "Database maintenance failed; check privileges, field types and connectivity".into(),
+    }
+}
+
 /// Save private job progress and recovery state.
 fn persist(state: &AppState, job: &Job) -> Result<(), Error> {
     state
@@ -673,8 +695,44 @@ pub fn validate_version(version: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// Check the version ledger and apply supported SQL without blind DDL retries.
-pub async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), Error> {
+/// Serialize actual schema SQL on its own source session, including saved aliases.
+async fn migration_lock(
+    connection: &mut DatabaseConnection,
+    record: &DatabaseRecord,
+) -> Result<(), Error> {
+    let key = format!("fc-schema:{}", &target_hash(record)?[..48]);
+    let locked = match connection {
+        DatabaseConnection::Postgres(c) => {
+            sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock(hashtextextended($1,0))")
+                .bind(&key)
+                .fetch_one(c)
+                .await?
+        }
+        DatabaseConnection::Mysql(c) => {
+            sqlx::query_scalar::<_, Option<i64>>("SELECT GET_LOCK(?,0)")
+                .bind(&key)
+                .fetch_one(c)
+                .await?
+                == Some(1)
+        }
+    };
+    if !locked {
+        return Err(Error::Invalid(
+            "Another schema migration session is active; inspect its original operation",
+        ));
+    }
+    Ok(())
+}
+#[cfg(test)]
+async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), Error> {
+    apply_migration_inner(None, record, job).await
+}
+/// Check the version ledger and the original executor after taking its SQL-session lock.
+async fn apply_migration_inner(
+    store: Option<&crate::persistence::Store>,
+    record: &DatabaseRecord,
+    job: &Job,
+) -> Result<(), Error> {
     let settings = record.input.settings(record.id).map_err(Error::Invalid)?;
     let sql = job
         .sql
@@ -689,6 +747,12 @@ pub async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), E
         migration_statements(settings.summary.engine, &settings.summary.database, sql)?;
     let hash = format!("{:x}", Sha256::digest(sql.as_bytes()));
     let mut c = DatabaseConnection::connect_write(&record.input, &settings).await?;
+    migration_lock(&mut c, record).await?;
+    if let Some(store) = store {
+        store.check_database_job(job).map_err(|_| {
+            Error::Invalid("The original migration executor changed before SQL dispatch")
+        })?;
+    }
     write::initialize(&mut c, record.id).await?;
     let ledger = format!(
         "{}.migrations",
@@ -699,10 +763,6 @@ pub async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), E
             sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {ledger}(version text PRIMARY KEY,checksum text NOT NULL,status text NOT NULL,applied_at timestamptz)" )).execute(&mut *c).await?;
             let mut tx = write::pg_transaction(c).await?;
             sqlx::query("SET LOCAL search_path=public")
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-                .bind(format!("firecrab-migration:{}", record.id))
                 .execute(&mut *tx)
                 .await?;
             let previous: Option<(String, String)> = sqlx::query_as(&format!(
@@ -739,13 +799,6 @@ pub async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), E
         }
         DatabaseConnection::Mysql(c) => {
             sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {ledger}(version varchar(100) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,checksum char(64) NOT NULL,status varchar(16) NOT NULL,applied_at timestamp(6) NULL) ENGINE=InnoDB")).execute(&mut *c).await?;
-            let locked: i32 = sqlx::query_scalar("SELECT GET_LOCK(?,0)")
-                .bind(format!("fc-migration:{}", record.id))
-                .fetch_one(&mut *c)
-                .await?;
-            if locked != 1 {
-                return Err(Error::Invalid("Another schema migration is active"));
-            }
             let previous: Option<(String, String)> = sqlx::query_as(&format!(
                 "SELECT checksum,status FROM {ledger} WHERE version=?"
             ))
@@ -982,7 +1035,11 @@ pub async fn require_maintenance(state: &AppState, record: &DatabaseRecord) -> R
 }
 
 /// Refresh application grants and reinstall capture after maintenance.
-async fn reconcile_dependencies(state: &AppState, record: &DatabaseRecord) -> Result<(), Error> {
+async fn reconcile_dependencies(
+    state: &AppState,
+    record: &DatabaseRecord,
+    job: &Job,
+) -> Result<(), Error> {
     let settings = record.input.settings(record.id).map_err(Error::Invalid)?;
     let mut c = DatabaseConnection::connect_write(&record.input, &settings).await?;
     write::initialize(&mut c, record.id).await?;
@@ -999,6 +1056,7 @@ async fn reconcile_dependencies(state: &AppState, record: &DatabaseRecord) -> Re
         .into_iter()
         .filter(|b| b.database_id == record.id)
     {
+        let before = binding.clone();
         binding.tables = tables
             .tables
             .iter()
@@ -1010,7 +1068,7 @@ async fn reconcile_dependencies(state: &AppState, record: &DatabaseRecord) -> Re
         super::bindings::provision(record, &binding).await?;
         state
             .store
-            .save_database_binding(&binding)
+            .save_database_binding_observation(job, &before, &binding)
             .map_err(|_| Error::Invalid("Cannot save refreshed service grants"))?;
     }
     for mut trigger in state
@@ -1031,10 +1089,11 @@ async fn reconcile_dependencies(state: &AppState, record: &DatabaseRecord) -> Re
         {
             super::events::install(&mut c, &trigger).await?;
         } else {
+            let before = trigger.clone();
             trigger.detached = true;
             state
                 .store
-                .save_database_trigger(&trigger)
+                .save_database_trigger_observation(job, &before, &trigger)
                 .map_err(|_| Error::Invalid("Cannot save detached table capture"))?;
         }
     }
@@ -1054,12 +1113,18 @@ async fn run(state: &AppState, record: &DatabaseRecord, job: &mut Job) -> Result
     require_maintenance(state, record).await?;
     let mut safety = Job::new(record, Uuid::new_v4(), Kind::Backup)?;
     safety.status = "running".into();
+    safety.parent = Some(ParentJob {
+        id: job.id,
+        execution_generation: job.execution_generation,
+    });
+    job.safety_backup_id = Some(safety.id);
+    persist(state, job)?;
     persist(state, &safety)?;
     match backup(state, record, &mut safety).await {
         Ok(()) => safety.status = "succeeded".into(),
         Err(e) => {
             safety.status = "failed".into();
-            safety.error = Some(e.to_string());
+            safety.error = Some(redacted_error(&e));
             persist(state, &safety)?;
             return Err(e);
         }
@@ -1087,7 +1152,7 @@ async fn run(state: &AppState, record: &DatabaseRecord, job: &mut Job) -> Result
         super::events::detach(&mut c, &trigger).await?;
     }
     if job.kind == Kind::Migration {
-        apply_migration(record, job).await?;
+        apply_migration_inner(Some(&state.store), record, job).await?;
     } else {
         let snapshot = state
             .store
@@ -1101,7 +1166,7 @@ async fn run(state: &AppState, record: &DatabaseRecord, job: &mut Job) -> Result
     for alias in aliases {
         let mut privileged = record.clone();
         privileged.id = alias.id;
-        reconcile_dependencies(state, &privileged).await?;
+        reconcile_dependencies(state, &privileged, job).await?;
     }
     for mut old in state
         .store
@@ -1155,15 +1220,10 @@ pub fn spawn(state: AppState) {
         if let Ok(records) = state.store.list_pipe_databases() {
             for record in records {
                 if let Ok(jobs) = state.store.database_jobs(record.id) {
-                    for mut job in jobs.into_iter().filter(|j| j.status == "running") {
-                        job.status = if job.maintenance_started {
-                            "needs_recovery"
-                        } else {
-                            "failed"
-                        }
-                        .into();
-                        job.error=Some("The API restarted during this job; inspect its safety backup before retrying".into());
-                        let _ = persist(&state, &job);
+                    for job in jobs.into_iter().filter(|j| j.status == "running") {
+                        let _ = state
+                            .store
+                            .interrupt_database_job(job.id, job.execution_generation);
                     }
                 }
             }
@@ -1172,11 +1232,13 @@ pub fn spawn(state: AppState) {
             let records = state.store.list_pipe_databases().unwrap_or_default();
             for record in records {
                 let jobs = state.store.database_jobs(record.id).unwrap_or_default();
-                if let Some(mut job) = jobs.iter().rev().find(|j| j.status == "queued").cloned() {
-                    job.status = "running".into();
-                    if persist(&state, &job).is_err() {
+                if let Some(queued) = jobs.iter().rev().find(|j| j.status == "queued") {
+                    let Ok(Some(mut job)) = state
+                        .store
+                        .claim_database_job(queued.id, queued.execution_generation)
+                    else {
                         continue;
-                    }
+                    };
                     let outcome = tokio::time::timeout(
                         Duration::from_secs(1800),
                         run(&state, &record, &mut job),
@@ -1194,10 +1256,12 @@ pub fn spawn(state: AppState) {
                                 "failed"
                             }
                             .into();
-                            job.error=Some(match error{Error::Invalid(message)=>message.to_owned(),_=>"Database maintenance failed; check privileges, field types and connectivity".into()});
+                            job.error = Some(redacted_error(&error));
                         }
                     }
-                    let _ = persist(&state, &job);
+                    if persist(&state, &job).is_err() {
+                        continue;
+                    }
                     if (job.kind == Kind::Backup && job.status == "failed"
                         || job.kind == Kind::Restore)
                         && let Ok(path) = backup_path(&state, job.id)
