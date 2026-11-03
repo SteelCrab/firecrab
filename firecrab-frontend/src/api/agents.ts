@@ -69,6 +69,11 @@ export type VmRepository = {
   error?: string | null;
 };
 export type AgentTerminal = { agent: AgentSession; text: string };
+export type GitHubRepository = {
+  name: string;
+  private: boolean;
+  archived: boolean;
+};
 
 export class AgentRequestError extends Error {
   readonly status: number;

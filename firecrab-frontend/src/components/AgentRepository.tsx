@@ -13,10 +13,11 @@ import {
   agentRequest,
   type GitHubAuth,
   type VmRepository,
+  type GitHubRepository as Repository,
 } from "../api/agents";
 import { useI18n } from "../i18n";
+import AgentRepositoryCreate from "./AgentRepositoryCreate";
 
-type Repository = { name: string; private: boolean; archived: boolean };
 type Props = {
   project: VmRepository | null;
   github?: GitHubAuth;
@@ -62,6 +63,8 @@ export default function AgentRepository(p: Props) {
   const [listError, setListError] = useState("");
   const [copiedCode, setCopiedCode] = useState("");
   const [manual, setManual] = useState(false);
+  const [createRepository, setCreateRepository] = useState(false);
+  const [creationDirty, setCreationDirty] = useState(false);
   const ready = p.project?.state === "ready";
   const preparing = busy || p.project?.state === "preparing";
   const connected = p.github?.state === "connected";
@@ -94,9 +97,11 @@ export default function AgentRepository(p: Props) {
     return () => cancel.abort();
   }, [connected, ready, loadRepositories]);
   useEffect(() => {
-    onDirty(!ready && !!(repository.trim() || branch.trim()));
+    onDirty(
+      creationDirty || (!ready && !!(repository.trim() || branch.trim())),
+    );
     return () => onDirty(false);
-  }, [ready, repository, branch, onDirty]);
+  }, [creationDirty, ready, repository, branch, onDirty]);
   const connect = async () => {
     if (!p.canControl || authBusy || pending) return;
     setAuthBusy(true);
@@ -341,16 +346,26 @@ export default function AgentRepository(p: Props) {
             <div className="am-step-heading">
               <strong>{t("Repository", "저장소 선택")}</strong>
               {connected && (
-                <button
-                  className="am-text-button"
-                  type="button"
-                  disabled={!p.canControl || preparing}
-                  onClick={() => setManual((value) => !value)}
-                >
-                  {manual
-                    ? t("Choose from list", "목록에서 선택")
-                    : t("Enter an address", "주소로 연결")}
-                </button>
+                <div className="am-repository-options">
+                  <button
+                    className="am-text-button"
+                    type="button"
+                    disabled={!p.canControl || preparing}
+                    onClick={() => setCreateRepository(true)}
+                  >
+                    {t("New repository", "새 저장소 만들기")}
+                  </button>
+                  <button
+                    className="am-text-button"
+                    type="button"
+                    disabled={!p.canControl || preparing}
+                    onClick={() => setManual((value) => !value)}
+                  >
+                    {manual
+                      ? t("Choose from list", "목록에서 선택")
+                      : t("Enter an address", "주소로 연결")}
+                  </button>
+                </div>
               )}
             </div>
             {preparing ? (
@@ -495,6 +510,35 @@ export default function AgentRepository(p: Props) {
             )}
           </div>
         </form>
+      )}
+      {createRepository && connected && (
+        <AgentRepositoryCreate
+          controllerId={p.controllerId}
+          vmId={p.vmId}
+          canControl={p.canControl}
+          onClose={() => setCreateRepository(false)}
+          onDirty={setCreationDirty}
+          onCreated={async (value) => {
+            setRepository(value.name);
+            setBranch("");
+            setRepositories((old) => [
+              value,
+              ...old.filter((row) => row.name !== value.name),
+            ]);
+            try {
+              await agentRequest<VmRepository>(
+                "/project",
+                { repository: value.name, branch: "" },
+                p.controllerId,
+                p.vmId,
+              );
+            } catch (failure) {
+              void p.onSaved().catch(() => {});
+              throw failure;
+            }
+            await p.onSaved();
+          }}
+        />
       )}
     </section>
   );

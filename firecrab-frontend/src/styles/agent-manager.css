@@ -1130,6 +1130,32 @@
   font-size: 13px;
   font-weight: 500;
 }
+.am-repository-options {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.screen[data-view="ai-sandbox"] .app-dialog:has(.am-repository-create) {
+  width: min(560px, calc(100vw - 32px));
+}
+.screen[data-view="ai-sandbox"] .app-dialog > .am-repository-create {
+  display: grid;
+  gap: 18px;
+}
+.am-repository-create h2 {
+  margin: 0 0 10px;
+}
+.am-repository-create fieldset {
+  display: grid;
+  gap: 18px;
+}
+.am-repository-create footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .am-vm-repository p {
   font-size: 13px;
   line-height: 1.6;

@@ -148,7 +148,7 @@ fn router_for(home: PathBuf, platform: resource::Platform) -> Router {
                 )
                 .route(
                     "/api/service/agents/microvms/{vm}/github/repositories",
-                    get(vm_github_repositories),
+                    get(vm_github_repositories).post(create_vm_github_repository),
                 )
                 .route(
                     "/api/service/agents/microvms/{vm}/project",
@@ -338,6 +338,21 @@ async fn vm_github_repositories(
     .await
     .map_err(|e| Error::Invalid(e.to_string()))?
 }
+async fn create_vm_github_repository(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+    Json(input): Json<super::agents::github::CreateRepository>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .create_github_repository(input)
+            .map(Json)
+    })
+    .await
+    .map_err(|error| Error::Invalid(error.to_string()))?
+}
+
 async fn setup_vm_project(
     State(controller): State<Arc<Controller>>,
     RoutePath(vm): RoutePath<uuid::Uuid>,
