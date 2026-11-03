@@ -87,6 +87,7 @@ impl Store {
     ) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        super::iac_sandbox_tunnels::ensure_native_write(&tx, binding.id)?;
         let saved: String = tx.query_row(
             "SELECT spec FROM ai_sandbox_tunnels WHERE id=?1",
             [binding.id.to_string()],
@@ -96,6 +97,7 @@ impl Store {
             return Err(corrupt());
         }
         for mut previous in pending_predecessors(&tx, binding)? {
+            super::iac_sandbox_tunnels::ensure_native_write(&tx, previous.id)?;
             previous.handoff_confirmed_at = Some(binding.updated_at);
             previous.updated_at = binding
                 .updated_at
@@ -138,6 +140,8 @@ impl Store {
         }
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        super::iac_sandbox_tunnels::ensure_native_write(&tx, previous.id)?;
+        super::iac_sandbox_tunnels::ensure_native_write(&tx, next.id)?;
         let current: String = tx.query_row(
             "SELECT spec FROM ai_sandbox_tunnels WHERE id=?1",
             [previous.id.to_string()],
@@ -272,6 +276,7 @@ impl Store {
         let spec = serde_json::to_string(binding).map_err(|_| corrupt())?;
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        super::iac_sandbox_tunnels::ensure_native_write(&tx, binding.id)?;
         let existing: Option<String> = tx
             .query_row(
                 "SELECT spec FROM ai_sandbox_tunnels WHERE id=?1",

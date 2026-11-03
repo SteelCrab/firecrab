@@ -46,6 +46,16 @@ pub(super) fn delete_project_rows(
     conn: &rusqlite::Connection,
     id: Uuid,
 ) -> Result<(), PersistenceError> {
+    let managed: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels t
+        JOIN iac_resource_owners o ON o.kind='sandbox_tunnel' AND o.resource_id=t.id
+        WHERE t.project_id=?1 AND o.manager IS NOT NULL)",
+        [id.to_string()],
+        |row| row.get(0),
+    )?;
+    if managed {
+        return Err(PersistenceError::IacResourceBusy);
+    }
     conn.execute("DELETE FROM ai_sandbox_admissions WHERE task_id IN (SELECT id FROM ai_sandbox_tasks WHERE project_id=?1)",[id.to_string()])?;
     conn.execute(
         "DELETE FROM ai_sandbox_attempts WHERE project_id=?1",

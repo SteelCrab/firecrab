@@ -55,7 +55,34 @@ fn persist(
     state
         .store
         .save_sandbox_tunnel(binding)
-        .map_err(store_error(id))
+        .map_err(|error| super::stacks::persistence_error(error, id.0))
+}
+
+/// Ownership metadata never grants a public native caller permission to change a preview.
+fn require_unmanaged(state: &AppState, id: RequestId, key: Uuid) -> Result<(), AppError> {
+    let resource = firecrab_stack::ManagedResource {
+        kind: "sandbox_tunnel".into(),
+        id: key.to_string(),
+    };
+    let error = |error| super::stacks::persistence_error(error, id.0);
+    if state
+        .store
+        .iac_resource_owner(&resource)
+        .map_err(error)?
+        .owner
+        .is_some()
+        || !state
+            .store
+            .iac_public_write_allowed(&resource)
+            .map_err(error)?
+    {
+        return Err(AppError::conflict(
+            "iac_resource_managed",
+            "preview binding is managed; transfer or release its ownership before native changes",
+            id.0,
+        ));
+    }
+    Ok(())
 }
 fn authorize(
     state: &AppState,
@@ -98,6 +125,9 @@ fn authorize(
         || saved.caller.principal != binding.owner
     {
         return Err(failure(id, "sandbox_preview_reference_changed"));
+    }
+    if write {
+        require_unmanaged(state, id, binding.id)?;
     }
     Ok(())
 }
@@ -639,6 +669,7 @@ pub async fn save(
                 handoff_confirmed_at: None,
             }
         };
+    require_unmanaged(&state, id, key)?;
     if address(&inspect(&state, id).await?, &binding).is_none() {
         return Err(failure(id, "sandbox_preview_register_in_pipe"));
     }

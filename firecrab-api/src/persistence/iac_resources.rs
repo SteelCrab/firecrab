@@ -38,6 +38,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "ai_model",
     "sandbox_environment",
     "sandbox_project",
+    "sandbox_tunnel",
     "stack_source",
     "sandbox_access",
     "queue_engine",
@@ -139,6 +140,7 @@ pub(super) fn validate(
         "sandbox_project" => {
             "SELECT EXISTS(SELECT 1 FROM ai_sandbox_projects WHERE id=?1 AND json_extract(spec,'$.id')=?1)"
         }
+        "sandbox_tunnel" => return super::iac_sandbox_tunnels::validate(conn, resource, adopting),
         "stack_source" => {
             "SELECT EXISTS(SELECT 1 FROM stack_git_sources WHERE stack_id=?1 AND json_extract(status,'$.stackId')=?1)"
         }

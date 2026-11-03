@@ -71,6 +71,7 @@ mod iac_native_schema;
 mod iac_operation_queries;
 mod iac_owners;
 mod iac_resources;
+mod iac_sandbox_tunnels;
 pub(crate) mod iac_vm_deletes;
 mod iac_volume_attachments;
 pub(crate) mod queue_engine_operations;

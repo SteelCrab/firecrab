@@ -33,6 +33,8 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Preserve independent Sandbox preview binding ownership with original task/runtime
+  checks and transactional fences for native changes, handoffs and parent deletion.
 - Preserve fixed-address ownership with the original registry, credential digest
   and exclusive connector pins, including after private address-record deletion.
 - Retain independent named Cloudflare connector ownership on the privileged host

@@ -109,6 +109,7 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "ai_model",
             "sandbox_environment",
             "sandbox_project",
+            "sandbox_tunnel",
             "stack_source",
             "sandbox_access",
             "queue_engine",
