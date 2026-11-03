@@ -15,7 +15,11 @@ import {
   listMicroNetworks,
   listStorageRoots,
 } from "../api/client";
-import { agentRequest, type AgentStatus } from "../api/agents";
+import {
+  agentRequest,
+  isAgentConnectionPending,
+  type AgentStatus,
+} from "../api/agents";
 import {
   createWorkspace,
   getWorkspace,
@@ -137,8 +141,12 @@ export default function AgentWorkspaceCreate({
       );
     setPreparingCli(true);
     let prepared = false;
-    let failures = 0;
     const deadline = Date.now() + 15 * 60_000;
+    const waiting = t(
+      "Waiting for the VM's SSH connection. Coding tool installation will continue when it is ready.",
+      "VM의 SSH 연결을 준비하고 있어요. 연결되면 AI 도구 설치를 이어가요.",
+    );
+    setLog(waiting);
     while (current()) {
       let status: AgentStatus;
       try {
@@ -148,9 +156,19 @@ export default function AgentWorkspaceCreate({
           undefined,
           vm.id,
         );
-        failures = 0;
       } catch (failure) {
-        if (++failures > 10 || Date.now() > deadline) throw failure;
+        if (!current()) return;
+        if (!isAgentConnectionPending(failure)) throw failure;
+        setLog(
+          `${waiting}\n${failure instanceof Error ? failure.message : String(failure)}`,
+        );
+        if (Date.now() >= deadline)
+          throw Error(
+            t(
+              "The VM's SSH connection is still unavailable. Check its console, then continue preparation. The existing VM is retained.",
+              "VM의 SSH 연결 준비 시간이 초과됐어요. VM 콘솔을 확인한 뒤 이어서 준비해 주세요. 기존 VM은 유지해요.",
+            ),
+          );
         await delay();
         continue;
       }
@@ -164,10 +182,13 @@ export default function AgentWorkspaceCreate({
         );
       const driver = status.drivers.find((driver) => driver.id === chosen);
       if (status.available && driver?.available) break;
-      setLog(status.preparation?.log || "");
-      if (status.preparation?.state === "failed" && prepared)
+      setLog(status.preparation?.log || waiting);
+      if (
+        ["failed", "interrupted"].includes(status.preparation?.state || "") &&
+        prepared
+      )
         throw Error(
-          status.preparation.error ||
+          status.preparation?.error ||
             t("CLI preparation failed.", "AI 도구를 설치하지 못했어요."),
         );
       if (status.preparation?.state !== "installing" && !prepared) {
