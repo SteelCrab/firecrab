@@ -1,5 +1,11 @@
 # Shared security-group lifecycle
 
+Rule changes reject an unconfirmed VM runtime when its storage mapping is
+unavailable. The runtime probe never substitutes the default storage root for
+that missing mapping. Restore the original mapping before retrying.
+Missing or invalid service phase/replica metadata also cannot prove inactivity.
+Native and shared policy deletion apply this check to retained deployment references.
+
 The `security_group` adapter freezes the complete saved IPv4 policy for both
 manager identities. It belongs to [#548 stage 2](../reference/iac.md). Full native
 YAML, Terraform and automatic dependency orchestration remain separate stages.

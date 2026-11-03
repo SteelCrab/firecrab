@@ -71,10 +71,12 @@ pub(crate) fn vm_is_active(state: &AppState, vm: &VmRecord) -> Result<bool, std:
     {
         return Ok(true);
     }
-    let path =
-        crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), vm.id)
-            .dir
-            .join("vm.lock");
+    let root = state
+        .storage_path_for(&vm.storage_root)
+        .map_err(|_| std::io::Error::other("VM storage mapping is unavailable"))?;
+    let path = crate::artifacts::VmArtifactPaths::for_vm(&root.join("vms"), vm.id)
+        .dir
+        .join("vm.lock");
     let file = match OpenOptions::new().read(true).write(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),

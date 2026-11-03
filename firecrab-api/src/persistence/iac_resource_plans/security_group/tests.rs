@@ -39,6 +39,67 @@ fn input(store: &Store, manager: Manager) -> PlanResource {
         )),
     }
 }
+
+#[test]
+fn iac_resource_security_group_missing_service_phase_or_instances_never_proves_inactivity() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("state.db")).unwrap();
+    let plan = store
+        .plan_resource(input(&store, Manager::Stack), 100)
+        .unwrap();
+    let receipt = apply(&store, &plan, 101).unwrap();
+    let id: Uuid = receipt.ownership.resource.id.parse().unwrap();
+    let service = Uuid::new_v4().to_string();
+    for mut deployment in [
+        serde_json::json!({"instances":[]}),
+        serde_json::json!({"phase":null,"instances":[]}),
+        serde_json::json!({"phase":"unknown","instances":[]}),
+        serde_json::json!({"phase":"stopped"}),
+        serde_json::json!({"phase":"stopped","instances":null}),
+        serde_json::json!({"phase":"stopped","instances":{}}),
+    ] {
+        deployment["spec"] = serde_json::json!({"securityGroupId":id});
+        store
+            .lock()
+            .execute(
+                "INSERT INTO micro_service_deployments(service_id,deployment) VALUES(?1,?2)
+            ON CONFLICT(service_id) DO UPDATE SET deployment=excluded.deployment",
+                params![service, deployment.to_string()],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.replace_security_group_rules(id, &[]),
+            Err(PersistenceError::IacResourceBusy)
+        ));
+        assert!(matches!(
+            store.delete_security_group(id),
+            Err(PersistenceError::IacResourceBusy)
+        ));
+        let removal = PlanResource {
+            operation_id: Uuid::new_v4(),
+            expected_endpoint_id: receipt.ownership.endpoint_id,
+            owner: receipt.ownership.owner.clone().unwrap(),
+            resource: Some(receipt.ownership.resource.clone()),
+            desired: None,
+            removal: None,
+        };
+        assert!(matches!(
+            store.plan_resource(removal, 102),
+            Err(PersistenceError::IacResourceBusy)
+        ));
+        assert_eq!(store.security_group(id).unwrap().unwrap().rules.len(), 1);
+    }
+    store
+        .lock()
+        .execute(
+            "DELETE FROM micro_service_deployments WHERE service_id=?1",
+            [service],
+        )
+        .unwrap();
+    store.replace_security_group_rules(id, &[]).unwrap();
+    assert!(store.security_group(id).unwrap().unwrap().rules.is_empty());
+    assert!(store.delete_security_group(id).unwrap());
+}
 fn apply(
     store: &Store,
     plan: &ResourcePlan,

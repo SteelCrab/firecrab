@@ -168,6 +168,7 @@ impl Store {
         if referenced {
             return Err(PersistenceError::SecurityGroupInUse);
         }
+        ensure_rules_idle(&tx, &id.to_string())?;
         tx.execute(
             "DELETE FROM security_group_rules WHERE group_id = ?1",
             [id.to_string()],
@@ -261,7 +262,8 @@ fn ensure_writable(
 pub(super) fn ensure_rules_idle(conn: &Connection, id: &str) -> Result<(), PersistenceError> {
     let busy:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM vms WHERE security_group_id=?1 AND state NOT IN ('created','stopped','error'))
         OR EXISTS(SELECT 1 FROM micro_service_deployments WHERE json_extract(deployment,'$.spec.securityGroupId')=?1
-        AND (json_extract(deployment,'$.phase') NOT IN ('stopped','failed') OR json_array_length(deployment,'$.instances')>0))",
+        AND (COALESCE(json_extract(deployment,'$.phase'),'') NOT IN ('stopped','failed')
+        OR CASE WHEN json_type(deployment,'$.instances')='array' THEN json_array_length(deployment,'$.instances') ELSE 1 END>0))",
         [id],|row|row.get(0))?;
     if busy {
         return Err(PersistenceError::IacResourceBusy);

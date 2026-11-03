@@ -265,6 +265,37 @@ async fn active_and_orphaned_vm_runtimes_block_policy_changes() {
 }
 
 #[tokio::test]
+async fn iac_security_group_missing_vm_storage_mapping_never_uses_an_empty_default_root() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, router) = app(root.path()).await;
+    let network = network(&state, false);
+    let group = create_group(&router, network).await;
+    let mut vm = seed_vm(&state, group, network);
+    let original = vm.storage_root.clone();
+    vm.storage_root = Uuid::new_v4().to_string();
+    state.store.update(&vm).unwrap();
+    state.vms.lock().unwrap().insert(vm.id, vm.clone());
+    let path = format!("/api/security-groups/{group}/rules");
+    let before = state.store.security_group(group).unwrap().unwrap().rules;
+    let (code, error) = request(&router, "PUT", &path, json!({"rules":[rule()]})).await;
+    assert_eq!(code, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["error"]["code"], "vm_runtime_unconfirmed");
+    assert_eq!(
+        state.store.security_group(group).unwrap().unwrap().rules,
+        before
+    );
+    vm.storage_root = original;
+    state.store.update(&vm).unwrap();
+    state.vms.lock().unwrap().insert(vm.id, vm);
+    assert_eq!(
+        request(&router, "PUT", &path, json!({"rules":[rule()]}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn services_reference_groups_even_without_replicas_and_block_queued_rule_edits() {
     let root = tempfile::tempdir().unwrap();
     let (state, router) = app(root.path()).await;

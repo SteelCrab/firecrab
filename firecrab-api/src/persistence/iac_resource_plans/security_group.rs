@@ -86,6 +86,7 @@ pub(super) fn deletable(
     if used {
         return Err(PersistenceError::IacManagedDependent);
     }
+    super::super::security_groups::ensure_rules_idle(conn, &target.id)?;
     Ok(())
 }
 

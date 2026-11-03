@@ -34,6 +34,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Reject security-group rule changes when a VM's runtime cannot be checked at
+  its registered storage root. Never treat an empty default root as evidence
+  that a VM with a missing storage mapping is stopped.
+
 - Add operator-only typed current-configuration observation for all six shared
   adapters. Read configuration and authority in one snapshot, exclude credential
   values and application observations, report active recovery fences, and return
