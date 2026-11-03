@@ -1142,6 +1142,8 @@
 .screen[data-view="ai-sandbox"] .app-dialog > .am-repository-create {
   display: grid;
   gap: 18px;
+  /* Agent manager dialogs have no padding; their content supplies it. */
+  padding: 28px;
 }
 .am-repository-create h2 {
   margin: 0 0 10px;
@@ -1244,7 +1246,7 @@
 .screen[data-view="ai-sandbox"]
   .agent-manager
   .am-vm-repository
-  :is(input, select) {
+  :is(input:not([type="checkbox"]), select) {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;

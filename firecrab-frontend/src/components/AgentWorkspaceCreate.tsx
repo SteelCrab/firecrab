@@ -159,16 +159,19 @@ export default function AgentWorkspaceCreate({
       } catch (failure) {
         if (!current()) return;
         if (!isAgentConnectionPending(failure)) throw failure;
-        setLog(
-          `${waiting}\n${failure instanceof Error ? failure.message : String(failure)}`,
-        );
-        if (Date.now() >= deadline)
+        // Refusals are expected while the guest boots; the cause matters only on timeout.
+        if (Date.now() < deadline) setLog(waiting);
+        else {
+          setLog(
+            `${waiting}\n${failure instanceof Error ? failure.message : String(failure)}`,
+          );
           throw Error(
             t(
               "The VM's SSH connection is still unavailable. Check its console, then continue preparation. The existing VM is retained.",
               "VM의 SSH 연결 준비 시간이 초과됐어요. VM 콘솔을 확인한 뒤 이어서 준비해 주세요. 기존 VM은 유지해요.",
             ),
           );
+        }
         await delay();
         continue;
       }

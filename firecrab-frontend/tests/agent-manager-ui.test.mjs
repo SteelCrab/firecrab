@@ -877,6 +877,49 @@ test("quick start prepares the default VM and resumes the same job after reload"
   );
 });
 
+test("SSH refusals while the new VM boots stay out of the installation log", async (t) => {
+  const { fixture, page } = await setup(t, { empty: true, select: false });
+  const id = "6b0f6f7e-1d52-4c1f-9c3e-2f1f4b8c7d10";
+  const refusal =
+    "MicroVM: Stdio forwarding request failed: Session open refused by peer";
+  let refusals = 0;
+  let booted = false;
+  await page.route(
+    `**/__firecrab_resources/api/service/agents/microvms/${id}`,
+    async (route) => {
+      if (booted) return route.fallback();
+      refusals++;
+      await route.fulfill({ status: 400, json: { error: refusal } });
+    },
+  );
+  let job;
+  fixture.handlers.set("POST /api/workspace-setups", ({ send, body }) => {
+    job = { ...body, vmId: id, state: "ready", phase: "complete", error: null };
+    send(202, job);
+    fixture.handlers.set(`GET /api/workspace-setups/${body.id}`, ({ send }) =>
+      send(200, job),
+    );
+  });
+  const row = vm(9, { id, name: "my-workspace", state: "running" });
+  fixture.state.vms.push(row);
+  fixture.handlers.set(`GET /api/vms/${id}`, ({ send }) => send(200, row));
+  await page
+    .getByRole("button", { name: "Create workspace", exact: true })
+    .click();
+  const form = page.getByRole("region", { name: "Workspace setup" });
+  await expect(form.locator("details pre")).toContainText(
+    "Waiting for the VM's SSH connection.",
+  );
+  // The second request starts only after the first refusal reached the log.
+  await expect.poll(() => refusals).toBeGreaterThan(1);
+  const log = await form.locator("details pre").textContent();
+  assert.ok(!log.includes("Stdio forwarding"), log);
+  booted = true;
+  await expect(
+    page.getByRole("heading", { name: "Choose your AI and repository" }),
+  ).toBeVisible({ timeout: 15000 });
+});
+
 test("a task waiting on CLI setup is sent only after the user resumes it", async (t) => {
   const { page, state } = await setup(t);
   state.agents[0].hasPendingTask = true;
@@ -1216,6 +1259,43 @@ test("GitHub AUTH shows a browser device code without creating a coding agent an
   ).toBeVisible();
   assert.equal(state.agents.length, 0);
   assert.equal(await auth.count(), 0);
+});
+
+test("the new GitHub repository dialog keeps its padding and README option inside", async (t) => {
+  const { page } = await setup(t, {
+    empty: true,
+    project: false,
+    github: { state: "connected" },
+  });
+  await page
+    .getByRole("button", { name: "New repository", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Create GitHub repository" });
+  await expect(dialog).toBeVisible();
+  await dialog.screenshot({
+    path: join(tmpdir(), "firecrab-repository-create.png"),
+  });
+  const m = await dialog.evaluate((node) => {
+    const box = (el) => el.getBoundingClientRect();
+    const d = box(node);
+    const label = node.querySelector("label:has(input[type=checkbox])");
+    const check = box(label.querySelector("input"));
+    return {
+      headingInset: box(node.querySelector("h2")).left - d.left,
+      submitInset: d.right - box(node.querySelector("footer .primary")).right,
+      checkbox: [check.width, check.height],
+      labelOverflow: label.scrollWidth - label.clientWidth,
+      labelRightGap: d.right - box(label).right,
+    };
+  });
+  const detail = JSON.stringify(m);
+  assert.ok(m.headingInset >= 20, detail);
+  assert.ok(m.submitInset >= 20, detail);
+  assert.ok(
+    m.checkbox.every((side) => side <= 24),
+    detail,
+  );
+  assert.ok(m.labelOverflow <= 0 && m.labelRightGap >= 20, detail);
 });
 
 test("GitHub authentication tools can be prepared before selecting any coding CLI", async (t) => {
