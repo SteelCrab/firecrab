@@ -289,12 +289,16 @@ impl Caller {
         saved: &super::SavedTask,
         permission: SandboxPermission,
     ) -> Result<(), String> {
+        if permission != SandboxPermission::Read {
+            reject_imported_attempt(state, saved)?;
+        }
         self.require_all(state, &task_rights(saved, permission))
     }
 }
 
 /// Re-read current grants and owning project before provider/file/guest side effects.
 pub fn attempt(state: &AppState, saved: &super::SavedTask) -> Result<(), String> {
+    reject_imported_attempt(state, saved)?;
     let mut rights = task_rights(saved, SandboxPermission::Execute);
     rights.push((
         SandboxResource::Connection {
@@ -388,4 +392,18 @@ fn task_rights(
         rights.push((SandboxResource::Vm { id }, SandboxPermission::Execute));
     }
     rights
+}
+
+/// Imported history cannot acquire a guest, provider or file mutation capability on another host.
+fn reject_imported_attempt(state: &AppState, saved: &super::SavedTask) -> Result<(), String> {
+    if state
+        .store
+        .imported_sandbox_task(saved.task.id)
+        .map_err(|_| "Cannot read imported attempt ownership")?
+    {
+        return Err(
+            "Imported attempts are read-only history; submit a new task on this host".into(),
+        );
+    }
+    Ok(())
 }

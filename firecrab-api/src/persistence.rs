@@ -24,6 +24,7 @@ mod cluster_services;
 mod database_services;
 mod pools;
 mod project_backups;
+mod project_imports;
 mod project_workspaces;
 mod queues;
 pub(crate) use cluster::ClusterError;
@@ -809,6 +810,8 @@ impl Store {
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute_batch(block_storage::SCHEMA)?;
         conn.execute_batch(project_workspaces::SCHEMA)?;
+        conn.execute_batch(project_imports::SCHEMA)?;
+        project_imports::require_complete(&conn)?;
         conn.execute_batch(project_backups::SCHEMA)?;
         conn.execute_batch(backup_cleanup::SCHEMA)?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;

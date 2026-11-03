@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Export or inspect a private, matched AI Canvas project backup for host transfer.
+"""Export, inspect or import a private, matched AI Canvas project backup for host transfer.
 
-This tool stages bytes only. It never registers resources, overwrites a destination,
-starts a VM, or mutates a running controller. A separate import workflow is needed.
+Export and inspection stage bytes without touching a live project. The Linux import
+command registers a fresh destination while its controller is stopped. Existing
+project or volume paths are never overwritten.
 """
 import argparse
 import fcntl
@@ -263,11 +264,22 @@ def main():
     plan.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
     plan.add_argument("--vm", required=True, type=identifier, help="Existing destination user VM UUID")
     plan.add_argument("--volume-name", required=True, help="Proposed destination volume name")
+    receive = commands.add_parser("import", help="Install and register a fresh project while the destination controller is stopped")
+    receive.add_argument("directory", help="Transferred matched checkpoint directory")
+    receive.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
+    receive.add_argument("--operation", required=True, type=identifier, help="Stable import UUID; reuse it after interruption")
+    receive.add_argument("--vm", required=True, type=identifier, help="Destination user VM that has never been started")
+    receive.add_argument("--storage", required=True, type=identifier, help="Registered destination MicroStorage UUID")
+    receive.add_argument("--volume-name", required=True)
+    receive.add_argument("--confirm-source-quiesced", action="store_true", help="Acknowledge source workload quiescence before cutover")
     args = parser.parse_args()
     if args.command == "export":
         export(args)
     elif args.command == "plan-import":
         destination_plan(args)
+    elif args.command == "import":
+        from project_backup_import import run_import
+        run_import(args, sys.modules[__name__])
     else:
         directory = Path(args.directory).absolute()
         if (directory / "INCOMPLETE").exists():
