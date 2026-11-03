@@ -197,9 +197,9 @@ def validate_destination(db, args, project, database, volume, catalog):
     return path.resolve(strict=True)
 
 
-def remap_catalog(db, catalog, route):
-    """Reserve ordered controller-backed history after all existing destination ordinals."""
-    if route or not catalog:
+def remap_catalog(db, catalog):
+    """Reserve ordered history after all existing destination ordinals."""
+    if not catalog:
         return catalog
     maximum = db.execute("SELECT COALESCE(MAX(ordinal),0) FROM sandbox_task_catalog").fetchone()[0]
     maximum = max(maximum, db.execute("SELECT COALESCE(MAX(rowid),0) FROM ai_sandbox_tasks").fetchone()[0])
@@ -227,7 +227,7 @@ def new_stage(source, folder, record, role, io):
     return path
 
 
-def sanitize_project_database(path, project, io):
+def sanitize_project_database(path, project, io, ordinals):
     """Keep historical bytes and private drafts; revoke all source-host execution leases."""
     db = rw_database(path)
     try:
@@ -247,6 +247,10 @@ def sanitize_project_database(path, project, io):
                     db.execute("UPDATE private_editors SET record=? WHERE id=?", (encode(value), key))
             if "ai_sandbox_tasks" in tables:
                 clear_task_paths(db, project)
+                for key, ordinal in db.execute("SELECT id,ordinal FROM ai_sandbox_task_index WHERE project_id=?", (project,)).fetchall():
+                    if key not in ordinals:
+                        raise ValueError("Private task index has no retained destination ordinal")
+                    db.execute("UPDATE ai_sandbox_task_index SET ordinal=? WHERE id=?", (ordinals[key], key))
         transaction(db, change)
         if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)] or db.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Prepared destination DB failed integrity checks")
@@ -299,7 +303,7 @@ def prepare_files(db, source, record, io):
     live = new_stage(source / "project.db", Path(folders["projectStage"]), record, "database", io)
     if io.digest(live) != expected["project.db"]:
         raise ValueError("Project source changed during copy")
-    sanitize_project_database(live, record["project"], io)
+    sanitize_project_database(live, record["project"], io, record.get("taskOrdinals", {}))
     planned.append({"stage": str(live), "path": str(Path(folders["project"]) / "project.db"), "sha": io.digest(live)})
     disk = new_stage(source / "data.ext4", Path(folders["volumeStage"]), record, "volume", io)
     if io.digest(disk) != expected["data.ext4"]:
@@ -447,8 +451,9 @@ def run_import(args, io):
                 # Older pending journals used source ordinals; retain their original plan.
                 mapping = record.get("taskOrdinals", {row[1]: row[0] for row in catalog})
                 catalog = planned_catalog(catalog, mapping)
+                record.setdefault("taskOrdinals", mapping)
             else:
-                catalog = remap_catalog(db, catalog, route)
+                catalog = remap_catalog(db, catalog)
             pool = validate_destination(db, args, c["projectId"], c["databaseId"], c["volumeId"], catalog)
             pool_stat = os.stat(pool)
             if m["volumeBytes"] % (1 << 30) or not 1 <= m["volumeBytes"] >> 30 <= 65535 or c["generation"] >= (1 << 63) - 1:

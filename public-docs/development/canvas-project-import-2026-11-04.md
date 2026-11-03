@@ -45,8 +45,7 @@ The operator CLI now includes `import`, not only export and destination inspecti
 This is an offline CLI path for a fresh destination project and volume. There is no
 in-place merge, task identity remapping or automatic source-host shutdown. The existing
 read-only `plan-import` command is preliminary; `import` has stricter admission checks.
-Task and attempt UUIDs must not collide with the destination catalog. Project-DB-backed
-history also requires noncolliding catalog ordinals. The original source
+Task and attempt UUIDs must not collide with the destination catalog. The original source
 archive stays available as private evidence. External task work directories and old
 migration-source archives are not copied. Models, skills, grants and runtime support
 need destination qualification before new tasks can run.
@@ -73,15 +72,21 @@ of interrupted evidence. The guide describes exact-ID resumption and operator re
 real ChatGPT/Claude execution, native editor recovery and production service-user/
 multi-user qualification unchecked. PR #562 stays Draft with no auto-merge.
 
-## Controller-backed catalog collisions
+## Task catalog ordinal collisions
 
-Controller-backed historical tasks now receive destination ordinals after the
-existing catalog and task row IDs. Relative task order, task IDs and attempt IDs
-remain unchanged. The mapping is journaled before file installation and reused
-after interruption. The copied task index and controller rows use the same mapping.
-Old in-progress journals keep their original ordinal plan.
+Both controller-backed and project-DB-backed histories now receive destination
+ordinals after existing catalog entries. Task/attempt IDs and relative order stay
+unchanged. The mapping is committed in the import journal before files are prepared.
+Retry uses the same mapping. The private project DB index and destination catalog
+use the same ordinals. Older incomplete journals keep their original ordinal plan.
 
-Project-DB-backed histories still reject ordinal collisions. Their protected source
-checkpoint contains the original private task index; accepting a different mapping
-without translating later restores could corrupt task ordering. UUID collisions also
-remain rejected. This increment has not been tested or run on a destination host.
+The original protected checkpoint remains byte-for-byte unchanged. A later restore
+copies and verifies that checkpoint, then translates its staged private index with
+the recorded mapping. Its restore receipt records the resulting DB hash before
+installation. Interrupted installation checks that hash on retry. Restore verifies the
+mapping against the destination catalog and rejects the original checkpoint if newer
+project-DB tasks would be lost. Other checkpoints continue using their original hashes.
+UUID collisions remain rejected.
+
+Tests and CI were skipped at the user's request. Real import, restore, interruption,
+restart and multi-user acceptance remain open.

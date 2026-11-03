@@ -9,6 +9,9 @@ pub(crate) struct Original {
     pub(super) volume: Option<String>,
     pub(super) wal: Option<String>,
     pub(super) shm: Option<String>,
+    /// Hash of a restored DB whose imported task ordering was translated.
+    #[serde(default)]
+    pub(super) installed_database: Option<String>,
 }
 /// Replace only our validated staging file, then publish and sync its parent directory.
 pub(super) fn publish(path: &FsPath, bytes: &[u8]) -> Result<(), Error> {
@@ -338,6 +341,74 @@ fn preserve(path: &FsPath, id: Uuid, expected: &Option<String>) -> Result<(), Er
     }
     Ok(())
 }
+/// Translate only the imported checkpoint's task index; preserve the source archive.
+fn translate_imported_ordinals(
+    state: &AppState,
+    path: &FsPath,
+    binding: &Binding,
+    checkpoint: Uuid,
+) -> Result<Option<String>, Error> {
+    let Some(ordinals) = state
+        .store
+        .imported_checkpoint_ordinals(binding.project_id, checkpoint)?
+    else {
+        return Ok(None);
+    };
+    let _file = db::private_file(path, false)?;
+    let mut conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_sandbox_task_index')", [], |r| r.get(0))?;
+    if !exists {
+        return Ok(None);
+    }
+    // This is a disposable staging copy. A crash before the prepared receipt
+    // causes it to be recopied from the verified checkpoint on retry.
+    conn.pragma_update(None, "journal_mode", "MEMORY")?;
+    let tx = conn.transaction()?;
+    let entries: Vec<(String, i64)> = {
+        let mut query =
+            tx.prepare("SELECT id,ordinal FROM ai_sandbox_task_index WHERE project_id=?1")?;
+        let rows = query.query_map([binding.project_id.to_string()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    if state.store.sandbox_storage_status(binding.project_id)?["storage"] == "project" {
+        let ids = entries.iter().map(|(id, _)| id.clone()).collect();
+        state
+            .store
+            .require_checkpoint_tasks(binding.project_id, &ids)?;
+    }
+    for (id, old) in entries {
+        let new = ordinals
+            .get(&id)
+            .copied()
+            .filter(|n| *n > 0)
+            .ok_or(Error::Conflict("Imported task ordinal is missing"))?;
+        if new != old {
+            tx.execute(
+                "UPDATE ai_sandbox_task_index SET ordinal=?2 WHERE id=?1",
+                rusqlite::params![id, new],
+            )?;
+        }
+    }
+    tx.commit()?;
+    drop(conn);
+    db::private_file(path, false)?.sync_all()?;
+    Ok(Some(hash(path)?))
+}
+
+/// Read the hash of the actual staged DB, including any recorded ordinal translation.
+fn restored_database_hash(r: &Record) -> Result<&str, Error> {
+    let manifest = r.public.manifest.as_ref().ok_or(Error::Missing)?;
+    Ok(r.original
+        .as_ref()
+        .and_then(|o| o.installed_database.as_deref())
+        .unwrap_or(&manifest.checkpoint.database_sha256))
+}
+
 fn prepare_restore(
     state: &AppState,
     root: &FsPath,
@@ -360,6 +431,7 @@ fn prepare_restore(
         {
             return Err(Error::Conflict("Database staging integrity failed"));
         }
+        let installed_database = translate_imported_ordinals(state, &stage, &r.binding, source)?;
         let stage = suffix(&target, "restore", id);
         if copy(&root.join(source.to_string()).join("data.ext4"), &stage)?
             != m.checkpoint.volume_sha256
@@ -372,6 +444,7 @@ fn prepare_restore(
             volume: optional_hash(&target)?,
             wal: optional_hash(&live.join("project.db-wal"))?,
             shm: optional_hash(&live.join("project.db-shm"))?,
+            installed_database,
         });
         r.public.manifest = Some(m);
         progress(state, r, "prepared")?;
@@ -391,7 +464,7 @@ pub(super) fn verify_installed(state: &AppState, r: &Record) -> Result<(), Error
     let disk = state.store.block_storage(r.binding.volume_id)?;
     let target = block_storage::disk_path(state, &disk).map_err(|_| Error::Missing)?;
     let m = r.public.manifest.as_ref().ok_or(Error::Missing)?;
-    if hash(&live.join("project.db"))? != m.checkpoint.database_sha256
+    if hash(&live.join("project.db"))? != restored_database_hash(r)?
         || hash(&target)? != m.checkpoint.volume_sha256
     {
         return Err(Error::Conflict("Restored pair integrity is unconfirmed"));
@@ -413,12 +486,7 @@ pub(super) fn interrupt_after_database(
     install(
         &live.join("project.db"),
         r.public.id,
-        &r.public
-            .manifest
-            .as_ref()
-            .unwrap()
-            .checkpoint
-            .database_sha256,
+        restored_database_hash(r)?,
         &old.database,
     )
 }
@@ -454,7 +522,7 @@ pub(super) fn restore(
     install(
         &live.join("project.db"),
         id,
-        &m.checkpoint.database_sha256,
+        restored_database_hash(r)?,
         &old.database,
     )?;
     install(&target, id, &m.checkpoint.volume_sha256, &old.volume)?;
