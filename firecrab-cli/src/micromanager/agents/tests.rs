@@ -580,6 +580,44 @@ pub(super) fn shell_replies(root: &Path, replies: Value) {
     .unwrap();
 }
 
+#[test]
+fn timed_out_login_checks_keep_the_last_known_answer() {
+    let known: std::collections::HashSet<String> = ["github".to_owned()].into_iter().collect();
+    // A busy VM can exceed the check's time limit; that is not a sign-out.
+    let (tools, auth) = guest::parse_probe(
+        "tool:herdr\ntool:gh\nauth:codex\nauth-unknown:github\n",
+        &known,
+    );
+    assert_eq!(tools.len(), 2);
+    assert!(tools.contains("herdr") && tools.contains("gh"));
+    assert!(auth.contains("codex") && auth.contains("github"));
+    // A definite answer replaces the old one; an unknown without history stays out.
+    let (_, auth) = guest::parse_probe("tool:gh\nauth-unknown:claude\n", &known);
+    assert!(auth.is_empty());
+    let (_, auth) = guest::parse_probe("tool:gh\n", &known);
+    assert!(auth.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn login_checks_run_in_parallel_with_a_longer_limit() {
+    let (root, mut runtime) = guest_fixture(false);
+    shell_replies(
+        root.path(),
+        json!({"DISABLE_AUTOUPDATER": {"out": "tool:herdr\ntool:gh\nauth-unknown:github\nauth:codex\n"}}),
+    );
+    runtime.guest.as_mut().unwrap().probe().unwrap();
+    let guest = runtime.guest.as_ref().unwrap();
+    assert!(guest.authenticated.contains("codex"));
+    assert!(!guest.authenticated.contains("github"));
+    let calls = fs::read_to_string(root.path().join("remote-calls.jsonl")).unwrap();
+    let script: String = serde_json::from_str(calls.lines().last().unwrap()).unwrap();
+    assert!(script.contains("timeout 12 \"$@\""), "{script}");
+    assert!(script.contains("login github gh auth status --hostname github.com &\n"));
+    assert!(script.contains("auth-unknown:"));
+    assert!(script.contains("&\nwait\n"), "{script}");
+}
+
 #[cfg(unix)]
 #[test]
 fn environment_preparation_is_single_flight_and_retains_success_or_failure_logs() {
@@ -723,6 +761,22 @@ fn preparation_lock_recovers_abandoned_locks_but_not_live_owners() {
     owner.kill().unwrap();
     owner.wait().unwrap();
     assert!(acquire().status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn sessions_can_be_renamed_with_a_one_line_name() {
+    let (_root, runtime, agent) = workspace_fixture();
+    let value = runtime.rename(agent.id, "  Login helper  ").unwrap();
+    assert_eq!(value["name"], "Login helper");
+    assert_eq!(value["id"], agent.id.to_string());
+    assert_eq!(runtime.records().unwrap()[0].name, "Login helper");
+    let long = "x".repeat(129);
+    for bad in ["", "   ", "two\nlines", "tab\tname", long.as_str()] {
+        assert!(runtime.rename(agent.id, bad).is_err(), "{bad:?}");
+    }
+    assert_eq!(runtime.records().unwrap()[0].name, "Login helper");
+    assert!(runtime.rename(Uuid::new_v4(), "Other").is_err());
 }
 
 #[cfg(unix)]

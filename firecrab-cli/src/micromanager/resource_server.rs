@@ -211,6 +211,10 @@ fn router_with_source(home: PathBuf, platform: resource::Platform, skill_source:
                     post(close_vm_agent),
                 )
                 .route(
+                    "/api/service/agents/microvms/{vm}/{id}/name",
+                    post(rename_vm_agent),
+                )
+                .route(
                     "/api/service/agents/microvms/{vm}/{id}/resume",
                     post(resume_vm_agent_task),
                 )
@@ -563,6 +567,25 @@ async fn input_vm_agent(
         let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
         super::agents::Runtime::for_vm(&controller.home, vm, true)?
             .input(id, input)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionName {
+    name: String,
+}
+async fn rename_vm_agent(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+    Json(input): Json<SessionName>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .rename(id, &input.name)
             .map(Json)
     })
     .await

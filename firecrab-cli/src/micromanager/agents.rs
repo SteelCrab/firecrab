@@ -957,6 +957,27 @@ impl Runtime {
         }
         self.inspect(id)
     }
+    /// A display name only; the Herdr workspace and its terminal keep their identity.
+    pub fn rename(&self, id: Uuid, name: &str) -> Result<Value, Error> {
+        let name = name.trim();
+        if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
+            return Err(invalid("Use a one-line session name up to 128 bytes."));
+        }
+        let mut records = self.records()?;
+        let index = records
+            .iter()
+            .position(|a| a.id == id)
+            .ok_or_else(|| invalid("Unknown agent session"))?;
+        records[index].name = name.into();
+        self.save(&records)?;
+        let agent = &records[index];
+        let pane = if agent.closed {
+            None
+        } else {
+            self.pane(agent).ok()
+        };
+        Ok(self.projection(agent, pane.as_ref()))
+    }
     pub fn close(&self, id: Uuid) -> Result<Value, Error> {
         let mut records = self.records()?;
         let index = records

@@ -187,6 +187,17 @@ async fn vm_agent_operations_reject_damaged_private_identity_without_falling_bac
             "close",
             close_vm_agent(state(), RoutePath((vm, id))).boxed(),
         ),
+        (
+            "rename",
+            rename_vm_agent(
+                state(),
+                RoutePath((vm, id)),
+                Json(SessionName {
+                    name: "Login helper".into(),
+                }),
+            )
+            .boxed(),
+        ),
     ];
     for (name, operation) in operations {
         let error = operation.await.expect_err(name);
@@ -252,6 +263,14 @@ async fn concurrent_vm_mutations_return_conflict_without_entering_the_guest() {
         )
         .boxed(),
         close_vm_agent(state(), RoutePath((vm, id))).boxed(),
+        rename_vm_agent(
+            state(),
+            RoutePath((vm, id)),
+            Json(SessionName {
+                name: "Login helper".into(),
+            }),
+        )
+        .boxed(),
     ];
     for operation in operations {
         assert_eq!(

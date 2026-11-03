@@ -290,16 +290,20 @@ impl Guest {
             std::sync::Mutex<std::collections::HashMap<PathBuf, Cached>>,
         > = std::sync::OnceLock::new();
         let cache = CACHE.get_or_init(Default::default);
-        if let Some((at, available, authenticated)) = cache
+        // An older answer is still the best fallback for a check that runs out of time.
+        let previous = match cache
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .get(&self.home)
-            && at.elapsed() < Duration::from_secs(5)
         {
-            self.available = available.clone();
-            self.authenticated = authenticated.clone();
-            return Ok(());
-        }
+            Some((at, available, authenticated)) if at.elapsed() < Duration::from_secs(5) => {
+                self.available = available.clone();
+                self.authenticated = authenticated.clone();
+                return Ok(());
+            }
+            Some((_, _, authenticated)) => authenticated.clone(),
+            None => HashSet::new(),
+        };
         let mut script = String::from("set -eu\nexport DISABLE_AUTOUPDATER=1\n");
         for command in ["herdr", "git", "gh"]
             .into_iter()
@@ -309,16 +313,19 @@ impl Guest {
                 "if command -v {command} >/dev/null 2>&1; then printf 'tool:{command}\\n'; fi\n"
             ));
         }
-        script.push_str("if command -v timeout >/dev/null 2>&1; then\nif command -v codex >/dev/null 2>&1 && timeout 5 codex login status >/dev/null 2>&1; then printf 'auth:codex\\n'; fi\nif command -v claude >/dev/null 2>&1 && timeout 5 claude auth status >/dev/null 2>&1; then printf 'auth:claude\\n'; fi\nif command -v gh >/dev/null 2>&1 && timeout 5 gh auth status --hostname github.com >/dev/null 2>&1; then printf 'auth:github\\n'; fi\nfi\n");
+        // Login checks call the provider and run slowly on a busy VM. Run them
+        // together, and report a check that ran out of time as unknown.
+        script.push_str(concat!(
+            "if command -v timeout >/dev/null 2>&1; then\n",
+            "login() { name=$1; shift; command -v \"$1\" >/dev/null 2>&1 || return 0; rc=0; timeout 12 \"$@\" >/dev/null 2>&1 || rc=$?; ",
+            "if [ \"$rc\" -eq 0 ]; then printf 'auth:%s\\n' \"$name\"; elif [ \"$rc\" -eq 124 ]; then printf 'auth-unknown:%s\\n' \"$name\"; fi; }\n",
+            "login codex codex login status &\n",
+            "login claude claude auth status &\n",
+            "login github gh auth status --hostname github.com &\n",
+            "wait\nfi\n",
+        ));
         let result = self.shell(&script, Duration::from_secs(20))?;
-        self.available = result
-            .lines()
-            .filter_map(|s| s.strip_prefix("tool:").map(str::to_owned))
-            .collect();
-        self.authenticated = result
-            .lines()
-            .filter_map(|s| s.strip_prefix("auth:").map(str::to_owned))
-            .collect();
+        (self.available, self.authenticated) = parse_probe(&result, &previous);
         cache.lock().unwrap_or_else(|p| p.into_inner()).insert(
             self.home.clone(),
             (
@@ -508,6 +515,22 @@ pub(super) fn repository_url(input: &str) -> Result<Option<String>, Error> {
         ));
     }
     Ok(Some(format!("https://github.com/{path}.git")))
+}
+
+/// Tools and logins reported by the probe script. A login check that ran out
+/// of time keeps its last known answer; only a definite reply changes it.
+pub(super) fn parse_probe(
+    output: &str,
+    previous: &HashSet<String>,
+) -> (HashSet<String>, HashSet<String>) {
+    let lines = |prefix: &'static str| {
+        output
+            .lines()
+            .filter_map(move |line| line.strip_prefix(prefix).map(str::to_owned))
+    };
+    let mut authenticated: HashSet<String> = lines("auth:").collect();
+    authenticated.extend(lines("auth-unknown:").filter(|name| previous.contains(name)));
+    (lines("tool:").collect(), authenticated)
 }
 
 fn ssh_path(name: &str, path: &Path) -> String {
