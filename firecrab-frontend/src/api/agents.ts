@@ -213,3 +213,10 @@ export function agentEditorUrl(
   });
   return `${window.location.origin}${window.location.pathname}#/ai-sandbox?${params}`;
 }
+
+/** Latest typed input and CLI reply of a session, read from the CLI's transcript. */
+export type AgentPreview = {
+  id: string;
+  input: string | null;
+  response: string | null;
+};

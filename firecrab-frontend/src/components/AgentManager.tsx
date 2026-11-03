@@ -958,6 +958,8 @@ function VmAgentWorkspace({
                 stale={stale || (!!status && !identityMatches)}
                 known={!!status}
                 onOpen={openTask}
+                vmId={vmId}
+                pageOpen={page === "tasks"}
               />
               {!agents.length ? (
                 <div className="am-start">

@@ -108,6 +108,7 @@ async function setup(
         }
       : null,
   };
+  state.previews = [];
   state.streams = [];
   state.keys = [];
   state.search = {
@@ -283,6 +284,8 @@ async function setup(
         }
         return route.fulfill({ json: state.vmSkills });
       }
+      if (path === "/previews")
+        return route.fulfill({ json: { previews: state.previews } });
       if (path === "/rules") return route.fulfill({ json: state.rules });
       if (path === "/rules/refine") {
         if (state.refineError)
@@ -2475,6 +2478,65 @@ test("the board distinguishes undelivered work from completion and account sessi
   );
   assert.equal(state.calls.filter((call) => call.method === "POST").length, 0);
 });
+
+for (const [width, locale] of [
+  [1440, "en"],
+  [390, "ko"],
+]) {
+  test(`board cards show each session's latest input and response at ${width}px in ${locale}`, async (t) => {
+    const ko = locale === "ko";
+    const { page, state } = await setup(t, { width, locale, view: "board" });
+    const board = page.getByRole("region", {
+      name: ko ? "작업 보드" : "Task board",
+      exact: true,
+    });
+    const builder = board.locator('[data-task-id="builder"]');
+    const reviewer = board.locator('[data-task-id="reviewer"]');
+    await expect(builder).toContainText(
+      ko ? "아직 메시지가 없어요" : "No messages yet",
+    );
+    // Messages typed in the terminal view reach the board through the CLI transcript.
+    const reply = "Added GET /health with a focused test. ".repeat(20);
+    state.previews = [
+      { id: "builder", input: "Add a health endpoint", response: reply },
+      { id: "reviewer", input: "Review the API changes", response: null },
+    ];
+    await expect(
+      builder.getByText(ko ? "입력" : "Input", { exact: true }),
+    ).toBeVisible();
+    await expect(builder).toContainText("Add a health endpoint");
+    await expect(
+      builder.getByText(ko ? "응답" : "Response", { exact: true }),
+    ).toBeVisible();
+    await expect(builder).toContainText(
+      "Added GET /health with a focused test.",
+    );
+    await expect(reviewer).toContainText("Review the API changes");
+    await expect(reviewer).toContainText(
+      ko ? "응답을 기다리고 있어요" : "Waiting for a response",
+    );
+    const response = builder.locator(".am-board-card-text").last();
+    assert(
+      await response.evaluate((el) => el.scrollHeight > el.clientHeight + 1),
+      "A long response is clamped to a few lines",
+    );
+    assert((await builder.boundingBox()).height < 340);
+    assert(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    );
+    assert(
+      state.calls.some(
+        (call) => call.method === "GET" && call.path === "/previews",
+      ),
+    );
+    assert.equal(
+      state.calls.filter((call) => call.method === "POST").length,
+      0,
+    );
+  });
+}
 
 test("a board task can call Claude without changing the VM's selected Codex environment", async (t) => {
   const { page, state } = await setup(t, { view: "board" });

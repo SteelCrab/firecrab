@@ -213,6 +213,47 @@
 .am-board-card-state.attention {
   color: var(--amber-ink);
 }
+.am-board-card-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.am-board-card-preview.empty {
+  color: var(--text-4);
+}
+.am-board-card-message {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.am-board-card-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.am-board-card-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.am-board-card-message.response .am-board-card-text {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+.am-board-card-text.muted {
+  color: var(--text-4);
+}
 .am-board-empty {
   display: flex;
   min-height: 80px;

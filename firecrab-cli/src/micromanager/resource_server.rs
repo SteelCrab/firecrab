@@ -171,6 +171,10 @@ fn router_with_registry(
                 )
                 .route("/api/service/agents/microvms/{vm}", get(vm_agent_status))
                 .route(
+                    "/api/service/agents/microvms/{vm}/previews",
+                    get(vm_agent_previews),
+                )
+                .route(
                     "/api/service/agents/microvms/{vm}/github",
                     post(connect_vm_github),
                 )
@@ -337,6 +341,12 @@ async fn vm_agent_status(
     })
     .await
     .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn vm_agent_previews(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, Error> {
+    blocking(move || super::agents::Runtime::for_vm(&controller.home, vm, false)?.previews()).await
 }
 async fn vm_automation_status(
     State(controller): State<Arc<Controller>>,

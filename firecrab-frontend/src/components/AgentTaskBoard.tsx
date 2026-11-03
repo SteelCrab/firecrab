@@ -8,6 +8,8 @@ import {
 import { useI18n } from "../i18n";
 import { agentModelLabel, type AgentSession } from "../api/agents";
 import AgentBrandIcon from "./icons/AgentBrandIcon";
+import AgentCardPreview from "./AgentCardPreview";
+import { previewKinds, useAgentPreviews } from "./useAgentPreviews";
 import "../styles/agent-board.css";
 
 type Stage = "queued" | "working" | "attention" | "done";
@@ -46,14 +48,24 @@ export default function AgentTaskBoard({
   stale,
   known,
   onOpen,
+  vmId,
+  pageOpen,
 }: {
   agents: AgentSession[];
   hidden: boolean;
   stale: boolean;
   known: boolean;
   onOpen: (id: string) => void;
+  vmId: string;
+  pageOpen: boolean;
 }) {
   const { t } = useI18n();
+  const previewed = (agent: AgentSession) =>
+    !agent.closed && previewKinds.includes(agent.kind);
+  const previews = useAgentPreviews(
+    vmId,
+    pageOpen && !hidden && agents.some(previewed),
+  );
   const stateLabel = (agent: AgentSession) => {
     if (stale) return t("Last known state", "최근 확인한 상태");
     if (agent.closed || agent.state === "closed") return t("Closed", "종료됨");
@@ -120,6 +132,9 @@ export default function AgentTaskBoard({
                     />
                     {stateLabel(agent)}
                   </span>
+                  {previews && previewed(agent) && (
+                    <AgentCardPreview preview={previews[agent.id]} />
+                  )}
                 </button>
               ))}
               {!rows.length && (

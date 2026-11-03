@@ -19,6 +19,7 @@ pub mod files;
 pub mod github;
 mod guest;
 mod models;
+pub mod preview;
 pub mod project;
 mod recovery;
 pub mod rules;
@@ -395,19 +396,26 @@ impl Runtime {
             guest: Some(target),
         })
     }
-    fn guest_script(&self, args: &[&str]) -> String {
+    /// The guest's Herdr command for this instance's private session, without arguments.
+    fn guest_herdr(&self) -> String {
         let config = format!(
             "/root/.local/share/firecrab/agents/{}/config.toml",
             self.session
         );
         format!(
-            "mkdir -p {}; exec env HERDR_CONFIG_PATH={} herdr --session {} {}",
+            "env HERDR_CONFIG_PATH={} herdr --session {}",
+            guest::quote(&config),
+            guest::quote(&self.session)
+        )
+    }
+    fn guest_script(&self, args: &[&str]) -> String {
+        format!(
+            "mkdir -p {}; exec {} {}",
             guest::quote(&format!(
                 "/root/.local/share/firecrab/agents/{}",
                 self.session
             )),
-            guest::quote(&config),
-            guest::quote(&self.session),
+            self.guest_herdr(),
             args.iter()
                 .map(|s| guest::quote(s))
                 .collect::<Vec<_>>()
