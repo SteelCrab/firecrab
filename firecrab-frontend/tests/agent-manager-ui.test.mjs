@@ -110,48 +110,26 @@ async function setup(
   };
   state.streams = [];
   state.keys = [];
-  state.catalog = {
-    repository: "anthropics/skills",
-    commit: "ca45fc496a3436251f191354091d557da31c15b5",
-    error: null,
+  state.search = {
+    query: "playwright",
+    count: 2,
     skills: [
       {
-        name: "webapp-testing",
-        description: "Test local web apps with Playwright.",
-        license: "apache2",
-        importable: true,
-        reason: null,
-        files: ["SKILL.md", "LICENSE.txt", "scripts/run.py"],
-        preview: "---\nname: webapp-testing\n---",
-        imported: null,
-        updateAvailable: false,
+        name: "playwright-cli",
+        skill: "playwright-cli",
+        source: "microsoft/playwright-cli",
+        installs: 206087,
       },
       {
-        name: "pdf",
-        description: "Work with PDF files.",
-        license: "proprietary",
-        importable: false,
-        reason: "proprietary",
-        files: ["SKILL.md", "LICENSE.txt"],
-        preview: "---\nname: pdf\n---",
-        imported: null,
-        updateAvailable: false,
+        name: "webapp-testing",
+        skill: "webapp-testing",
+        source: "anthropics/skills",
+        installs: 196046,
       },
     ],
   };
-  state.vmSkills = {
-    enabled: [],
-    state: "applied",
-    reason: null,
-    clis: [
-      { id: "codex", name: "Codex", installed: true },
-      { id: "claude", name: "Claude Code", installed: true },
-      { id: "gemini", name: "Gemini CLI", installed: false },
-    ],
-    conflicts: [],
-  };
-  state.vmSkillsNext = "applied";
-  state.allClis = state.vmSkills.clis;
+  state.searchError = null;
+  state.vmSkills = { node: "missing", skills: [] };
   state.driverAuth = {};
   const rulesDoc = (text) => {
     const lines = text.replace(/\n$/, "").split("\n");
@@ -228,34 +206,48 @@ async function setup(
         body,
         headers: request.headers(),
       });
-      if (endpoint.endsWith("/api/service/agents/skills"))
-        return route.fulfill({ json: state.catalog });
-      const imported = endpoint.match(/\/agents\/skills\/([^/]+)\/import$/);
-      if (imported && request.method() === "POST") {
-        const skill = state.catalog.skills.find((s) => s.name === imported[1]);
-        skill.imported = { commit: state.catalog.commit, digest: "d1" };
-        skill.updateAvailable = false;
-        return route.fulfill({ json: state.catalog });
+      if (endpoint.endsWith("/api/service/agents/skills/search")) {
+        if (state.searchError)
+          return route.fulfill({
+            status: 400,
+            json: { error: state.searchError },
+          });
+        return route.fulfill({ json: state.search });
       }
       if (path === "/skills") {
         if (request.method() === "POST") {
-          const enabled = new Set(state.vmSkills.enabled);
-          if (body.enabled) enabled.add(body.name);
-          else enabled.delete(body.name);
-          state.vmSkills = { ...state.vmSkills, enabled: [...enabled] };
+          let result = null;
+          if (body.action === "install") {
+            state.vmSkills = {
+              node: "ready",
+              skills: [
+                ...state.vmSkills.skills.filter((s) => s.name !== body.skill),
+                {
+                  name: body.skill,
+                  source: body.source,
+                  agents: ["Claude Code", "Codex"],
+                  status: "tracked",
+                },
+              ],
+            };
+            result = [
+              {
+                name: body.skill,
+                status: "installed",
+                agents: ["Claude Code", "Codex"],
+                security: { gen: "low", socket: "0 alerts", snyk: "low" },
+              },
+            ];
+          }
+          if (body.action === "remove")
+            state.vmSkills = {
+              ...state.vmSkills,
+              skills: state.vmSkills.skills.filter(
+                (s) => s.name !== body.skill,
+              ),
+            };
+          return route.fulfill({ json: { result, installed: state.vmSkills } });
         }
-        const next = state.vmSkillsNext;
-        state.vmSkills = {
-          ...state.vmSkills,
-          state: next,
-          reason:
-            next === "pending"
-              ? "Start the selected MicroVM before connecting its CLI agents."
-              : next === "failed"
-                ? "MicroVM: tar: short read"
-                : null,
-          clis: next === "pending" ? [] : state.allClis,
-        };
         return route.fulfill({ json: state.vmSkills });
       }
       if (path === "/rules") return route.fulfill({ json: state.rules });
@@ -2054,7 +2046,7 @@ test(
   },
 );
 
-async function openSkills(page, locale) {
+async function openSkills(page, locale = "en") {
   await page
     .locator(".am-quick-sidebar")
     .getByRole("button", {
@@ -2068,109 +2060,124 @@ for (const [width, locale] of [
   [1440, "en"],
   [390, "ko"],
 ])
-  test(`skill store lists official skills and imports only allowed ones at ${width}px in ${locale}`, async (t) => {
+  test(`skill store searches skills.sh and installs with the skills CLI at ${width}px in ${locale}`, async (t) => {
     const { page, state } = await setup(t, { width, locale, view: "board" });
     await openSkills(page, locale);
-    await expect(page.getByText("anthropics/skills · ca45fc4")).toBeVisible();
-    await page.getByRole("button", { name: "pdf", exact: true }).click();
-    await expect(
-      page.getByText(
-        locale === "ko"
-          ? "독점 라이선스라서 가져올 수 없어요."
-          : "Proprietary license. Firecrab cannot copy this skill.",
-      ),
-    ).toBeVisible();
-    const importButton = page.getByRole("button", {
-      name: locale === "ko" ? "가져오기" : "Import",
-      exact: true,
-    });
-    await expect(importButton).toBeDisabled();
+    await expect(page.getByText("skills@1.7.6")).toBeVisible();
     await page
-      .getByRole("button", { name: "webapp-testing", exact: true })
+      .getByRole("searchbox", {
+        name: locale === "ko" ? "skills.sh 검색" : "Search skills.sh",
+      })
+      .fill("playwright");
+    await page
+      .getByRole("button", {
+        name: locale === "ko" ? "검색" : "Search",
+        exact: true,
+      })
       .click();
-    await expect(page.getByText("Apache 2.0")).toBeVisible();
-    await importButton.click();
     await expect(
-      page.getByText(locale === "ko" ? "✓ 가져옴" : "✓ Imported"),
+      page.getByText(locale === "ko" ? "검색 결과 2개" : "2 results"),
     ).toBeVisible();
-    const imports = state.calls.filter((c) => c.endpoint.endsWith("/import"));
-    assert.equal(imports.length, 1);
-    assert.equal(
-      imports[0].endpoint,
-      "/__firecrab_resources/api/service/agents/skills/webapp-testing/import",
+    await page
+      .getByRole("button", { name: /playwright-cli/ })
+      .first()
+      .click();
+    await expect(page.locator(".ask-detail")).toContainText(
+      "microsoft/playwright-cli",
     );
+    await expect(page.locator(".ask-detail")).toContainText("206,087");
+    await page
+      .getByRole("button", {
+        name: locale === "ko" ? "이 MicroVM에 설치" : "Install in this MicroVM",
+      })
+      .click();
+    await expect(page.locator(".ask-installed")).toContainText(
+      "playwright-cli",
+    );
+    await expect(page.locator(".ask-audit")).toContainText("Snyk low");
+    const installs = state.calls.filter(
+      (c) => c.path === "/skills" && c.method === "POST",
+    );
+    assert.equal(installs.length, 1);
+    assert.deepEqual(installs[0].body, {
+      action: "install",
+      source: "microsoft/playwright-cli",
+      skill: "playwright-cli",
+    });
     assert.equal(
-      imports[0].headers["x-firecrab-controller-id"],
+      installs[0].headers["x-firecrab-controller-id"],
       "native-controller",
     );
+    const search = state.calls.find((c) =>
+      c.endpoint.endsWith("/agents/skills/search"),
+    );
+    assert.ok(search);
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth > window.innerWidth,
     );
     assert.equal(overflow, false);
   });
 
-test("enabling a skill shows per-CLI state and pending VMs", async (t) => {
+test("installed skills can be removed and updated", async (t) => {
   const { page, state } = await setup(t, { view: "board" });
-  state.catalog.skills[0].imported = {
-    commit: state.catalog.commit,
-    digest: "d1",
-  };
-  state.vmSkillsNext = "pending";
-  await openSkills(page, "en");
-  await page
-    .getByRole("button", { name: "webapp-testing", exact: true })
-    .click();
-  await page.getByRole("switch", { name: "Use in this workspace" }).check();
-  await expect(page.getByText("Waiting for this MicroVM")).toBeVisible();
-  const toggles = state.calls.filter(
-    (c) => c.path === "/skills" && c.method === "POST",
-  );
-  assert.deepEqual(toggles.at(-1).body, {
-    name: "webapp-testing",
-    enabled: true,
-  });
-  state.vmSkillsNext = "applied";
-  await page.getByRole("button", { name: "Retry", exact: true }).click();
-  await expect(page.getByText("Codex ✓")).toBeVisible();
-  await expect(page.getByText("Claude Code ✓")).toBeVisible();
-  await expect(page.getByText("Gemini CLI · Not installed")).toBeVisible();
-  await expect(page.getByText("Applies to new agent sessions")).toBeVisible();
-  state.vmSkillsNext = "failed";
-  await page.getByRole("switch", { name: "Use in this workspace" }).uncheck();
-  await page.getByRole("switch", { name: "Use in this workspace" }).check();
-  await expect(page.getByText("MicroVM: tar: short read")).toBeVisible();
-  await expect(
-    page.getByRole("switch", { name: "Use in this workspace" }),
-  ).toBeChecked();
-});
-
-test("skill store keeps imported skills when GitHub fails", async (t) => {
-  const { page, state } = await setup(t, { view: "board" });
-  state.catalog = {
-    ...state.catalog,
-    commit: null,
-    error: "GitHub API rate limit reached. Try again later.",
+  state.vmSkills = {
+    node: "ready",
     skills: [
-      { ...state.catalog.skills[0], imported: { commit: "c", digest: "d" } },
+      {
+        name: "webapp-testing",
+        source: "anthropics/skills",
+        agents: ["Claude Code", "Codex"],
+        status: "tracked",
+      },
     ],
   };
-  await openSkills(page, "en");
+  await openSkills(page);
+  const installed = page.locator(".ask-installed");
+  await expect(installed).toContainText("webapp-testing");
+  await expect(installed).toContainText("Claude Code, Codex");
+  await installed.getByRole("button", { name: "Update all" }).click();
+  await installed
+    .getByRole("button", { name: "Remove webapp-testing" })
+    .click();
+  await expect(installed).not.toContainText("webapp-testing");
+  const changes = state.calls
+    .filter((c) => c.path === "/skills" && c.method === "POST")
+    .map((c) => c.body);
+  assert.deepEqual(changes, [
+    { action: "update" },
+    { action: "remove", skill: "webapp-testing" },
+  ]);
+});
+
+test("search errors and a missing MicroVM are explained", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  state.searchError = "skills.sh is unavailable. Try again later.";
+  await openSkills(page);
+  await expect(page.locator(".ask-installed")).toContainText("Node.js");
+  await page.getByRole("searchbox", { name: "Search skills.sh" }).fill("react");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(
-    "GitHub API rate limit reached. Try again later.",
+    "skills.sh is unavailable. Try again later.",
   );
+});
+
+test("skills cannot be installed before a MicroVM is selected", async (t) => {
+  const { page } = await setup(t, { select: false });
+  await openSkills(page);
+  await page
+    .getByRole("searchbox", { name: "Search skills.sh" })
+    .fill("playwright");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page
+    .getByRole("button", { name: /webapp-testing/ })
+    .first()
+    .click();
   await expect(
-    page.getByRole("button", { name: "webapp-testing", exact: true }),
+    page.getByRole("button", { name: "Install in this MicroVM" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("Select a MicroVM to install skills"),
   ).toBeVisible();
-  const before = state.calls.filter((c) =>
-    c.endpoint.endsWith("/agents/skills"),
-  ).length;
-  await page.getByRole("alert").getByRole("button", { name: "Retry" }).click();
-  await expect
-    .poll(
-      () =>
-        state.calls.filter((c) => c.endpoint.endsWith("/agents/skills")).length,
-    )
-    .toBeGreaterThan(before);
 });
 
 async function openRules(page, locale = "en") {

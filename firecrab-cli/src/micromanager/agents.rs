@@ -182,8 +182,6 @@ pub struct Runtime {
     session: String,
     bin_dir: Option<PathBuf>,
     guest: Option<guest::Guest>,
-    /// Controller home: the shared skill store lives under `runtime/skills`.
-    skills_home: PathBuf,
 }
 impl Runtime {
     pub fn new(home: &Path) -> Self {
@@ -196,7 +194,6 @@ impl Runtime {
             program: executable("herdr"),
             bin_dir: None,
             guest: None,
-            skills_home: home.to_path_buf(),
             session: format!("firecrab-{}", &digest[..16]),
         }
     }
@@ -306,19 +303,12 @@ impl Runtime {
         });
         Ok(state)
     }
-    /// Apply skills and AGENTS.md wiring to freshly installed CLIs. Best effort: outcomes are logged.
+    /// Apply AGENTS.md wiring to freshly installed CLIs. Best effort: the outcome is logged.
     fn after_preparation(&self, log_path: &Path) {
-        let mut line = match self.sync_skills() {
-            Ok(value) => format!(
-                "FIRECRAB_SKILLS={}\n",
-                value["state"].as_str().unwrap_or("")
-            ),
-            Err(error) => format!("FIRECRAB_SKILLS=failed {error}\n"),
-        };
-        line.push_str(&match self.ensure_rule_wiring() {
+        let line = match self.ensure_rule_wiring() {
             Ok(()) => "FIRECRAB_RULES=ready\n".to_owned(),
             Err(error) => format!("FIRECRAB_RULES=failed {error}\n"),
-        });
+        };
         if let Ok(mut file) = fs::OpenOptions::new().append(true).open(log_path) {
             use std::io::Write;
             let _ = file.write_all(line.as_bytes());
@@ -372,7 +362,6 @@ impl Runtime {
             session: format!("firecrab-{}", &digest[..16]),
             bin_dir: None,
             guest: Some(target),
-            skills_home: home.to_path_buf(),
         })
     }
     fn guest_script(&self, args: &[&str]) -> String {
@@ -690,8 +679,6 @@ impl Runtime {
                 ));
             }
             (input.cwd, repository, branch) = self.task_project(&input)?;
-            // New sessions read skills at startup; a failed sync is reported on the skill screen.
-            let _ = self.sync_skills();
         }
         let kind = if !input.cli.is_empty() {
             input.cli

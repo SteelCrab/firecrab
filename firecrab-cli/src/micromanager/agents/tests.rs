@@ -294,7 +294,6 @@ print(json.dumps({'result':result}))
         session: "guest-test".into(),
         bin_dir: None,
         guest: Some(guest),
-        skills_home: root.path().join("controller"),
     };
     (root, runtime)
 }

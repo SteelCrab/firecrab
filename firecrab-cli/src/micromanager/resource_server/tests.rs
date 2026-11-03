@@ -76,7 +76,7 @@ async fn vm_agent_operations_reject_damaged_private_identity_without_falling_bac
         agents: Mutex::new(()),
         editors: Mutex::new(()),
         skills: Mutex::new(()),
-        skill_source: closed_source(),
+        skill_registry: closed_registry(),
     });
     let state = || State(controller.clone());
     let vm = uuid::Uuid::new_v4();
@@ -208,7 +208,7 @@ async fn concurrent_vm_mutations_return_conflict_without_entering_the_guest() {
         agents: Mutex::new(()),
         editors: Mutex::new(()),
         skills: Mutex::new(()),
-        skill_source: closed_source(),
+        skill_registry: closed_registry(),
     });
     let (ready, locked) = tokio::sync::oneshot::channel();
     let (release, finish) = std::sync::mpsc::channel();
@@ -698,28 +698,61 @@ async fn native_agent_controls_are_scoped_to_the_selected_controller() {
     assert!(!dir.path().join("runtime/agents/sessions.json").exists());
 }
 
-fn closed_source() -> crate::micromanager::skills::source::Source {
-    crate::micromanager::skills::source::Source {
-        api: "http://127.0.0.1:9".into(),
-        raw: "http://127.0.0.1:9".into(),
+fn closed_registry() -> Registry {
+    Registry {
+        base: "http://127.0.0.1:9".into(),
     }
 }
 
-#[tokio::test]
-async fn skill_routes_require_the_controller_id_for_mutations() {
-    let dir = tempfile::tempdir().unwrap();
-    let app = router_with_source(
+fn app_with_closed_registry(dir: &tempfile::TempDir) -> Router {
+    router_with_registry(
         dir.path().into(),
         resource::tests::platform(),
-        closed_source(),
+        closed_registry(),
+    )
+}
+
+#[tokio::test]
+async fn skill_search_rejects_short_queries() {
+    let dir = tempfile::tempdir().unwrap();
+    let (status, _, body) = response(
+        app_with_closed_registry(&dir),
+        request("GET", "/api/service/agents/skills/search?q=a", None, ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"].as_str().unwrap().contains("2 to 100"),
+        "{body}"
     );
+}
+
+#[tokio::test]
+async fn skill_search_reports_an_unreachable_registry() {
+    let dir = tempfile::tempdir().unwrap();
+    let (status, _, body) = response(
+        app_with_closed_registry(&dir),
+        request("GET", "/api/service/agents/skills/search?q=react", None, ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"].as_str().unwrap().contains("skills.sh"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn skill_changes_require_the_controller_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let vm = uuid::Uuid::new_v4();
     let (status, _, _) = response(
-        app,
+        app_with_closed_registry(&dir),
         request(
             "POST",
-            "/api/service/agents/skills/webapp-testing/import",
+            &format!("/api/service/agents/microvms/{vm}/skills"),
             None,
-            "{}",
+            r#"{"action":"update"}"#,
         ),
     )
     .await;
@@ -727,34 +760,23 @@ async fn skill_routes_require_the_controller_id_for_mutations() {
 }
 
 #[tokio::test]
-async fn vm_skill_toggle_is_saved_while_the_vm_is_unreachable() {
+async fn skill_changes_reject_unknown_actions() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join("runtime/skills")).unwrap();
-    std::fs::write(
-        dir.path().join("runtime/skills/imported.json"),
-        serde_json::json!([{"name":"x","description":"","commit":"c","license":"apache2","digest":"d","files":[],"importedAt":0}]).to_string(),
-    )
-    .unwrap();
     let id = resource::controller_id(dir.path()).unwrap();
     let vm = uuid::Uuid::new_v4();
-    let app = router_with_source(
-        dir.path().into(),
-        resource::tests::platform(),
-        closed_source(),
-    );
-    let (status, _, body) = response(
-        app,
+    let (status, _, _) = response(
+        app_with_closed_registry(&dir),
         request(
             "POST",
             &format!("/api/service/agents/microvms/{vm}/skills"),
             Some(&id),
-            r#"{"name":"x","enabled":true}"#,
+            r#"{"action":"run","command":"id"}"#,
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["state"], "pending");
-    assert_eq!(body["enabled"], serde_json::json!(["x"]));
+    assert!(status.is_client_error(), "{status}");
+    assert_ne!(status, StatusCode::NOT_FOUND);
+    assert_ne!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[tokio::test]
@@ -762,11 +784,7 @@ async fn rule_routes_reject_unknown_fields() {
     let dir = tempfile::tempdir().unwrap();
     let id = resource::controller_id(dir.path()).unwrap();
     let vm = uuid::Uuid::new_v4();
-    let app = router_with_source(
-        dir.path().into(),
-        resource::tests::platform(),
-        closed_source(),
-    );
+    let app = app_with_closed_registry(&dir);
     let (status, _, _) = response(
         app,
         request(
@@ -780,19 +798,4 @@ async fn rule_routes_reject_unknown_fields() {
     assert!(status.is_client_error(), "{status}");
     assert_ne!(status, StatusCode::NOT_FOUND);
     assert_ne!(status, StatusCode::METHOD_NOT_ALLOWED);
-}
-
-#[tokio::test]
-async fn static_skill_and_rule_paths_do_not_hit_agent_id_routes() {
-    let dir = tempfile::tempdir().unwrap();
-    let app = router_with_source(
-        dir.path().into(),
-        resource::tests::platform(),
-        closed_source(),
-    );
-    let (status, _, body) =
-        response(app, request("GET", "/api/service/agents/skills", None, "")).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(body["error"].is_string());
-    assert_eq!(body["repository"], "anthropics/skills");
 }
