@@ -18,6 +18,11 @@ The operator can read app logs, lifecycle events and alert state with
 this host. Controller-managed and multi-host services cannot use these routes;
 their observations and settings are not forwarded across hosts.
 
+Read configuration and ownership without application observations through
+`GET /api/micro-services/{id}/observability/otlp`. Both IaC manager identities
+can use [shared OTLP plans](iac-service-otlp.md) with immutable receipts and
+explicit opt-in boundaries.
+
 When enabled, platform events and isolated application output are sent as
 OTLP/HTTP JSON to the base URL plus `/v1/logs`. Application output can contain
 sensitive data. Enabling export sends that output to the chosen collector.

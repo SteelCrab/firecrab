@@ -19,6 +19,8 @@ use uuid::Uuid;
 
 mod secret;
 mod security_group;
+mod service_otlp;
+pub(crate) use service_otlp::OtlpInput;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -39,6 +41,7 @@ enum Observation {
     SandboxAccess(firecrab_api_types::SandboxAccessPolicy),
     Secret(secret::SecretObservation),
     SecurityGroup(firecrab_stack::SecurityGroupConfiguration),
+    ServiceOtlp(service_otlp::OtlpObservation),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -120,6 +123,9 @@ fn observe(
     vault: Option<&crate::secrets::Contents>,
 ) -> Result<Option<Observation>, PersistenceError> {
     match target.kind.as_str() {
+        "service_otlp" => {
+            service_otlp::observe(conn, target).map(|value| value.map(Observation::ServiceOtlp))
+        }
         "security_group" => {
             security_group::observe(conn, target).map(|value| value.map(Observation::SecurityGroup))
         }
@@ -203,6 +209,9 @@ fn dependencies(
     before: Option<&Observation>,
     vault: Option<&crate::secrets::Contents>,
 ) -> Result<Vec<ResourcePlanDependency>, PersistenceError> {
+    if let Some(ResourceConfiguration::ServiceOtlp(config)) = desired {
+        return service_otlp::dependencies(conn, config);
+    }
     if let Some(ResourceConfiguration::SecurityGroup(config)) = desired {
         return security_group::dependencies(conn, config);
     }
@@ -234,6 +243,9 @@ fn dependencies(
 }
 
 fn deletable(conn: &Connection, resource: &ManagedResource) -> Result<(), PersistenceError> {
+    if resource.kind == "service_otlp" {
+        return super::otlp_config::validate_owner(conn, resource, false);
+    }
     if resource.kind == "security_group" {
         return security_group::deletable(conn, resource);
     }
@@ -269,12 +281,20 @@ pub(crate) fn validate(request: &mut PlanResource) -> Result<(), PersistenceErro
             .map_err(|_| PersistenceError::InvalidIacOwner)?;
         if !matches!(
             resource.kind.as_str(),
-            "shell" | "ai_model" | "sandbox_access" | "secret" | "security_group"
+            "shell" | "ai_model" | "sandbox_access" | "secret" | "security_group" | "service_otlp"
         ) {
             return Err(PersistenceError::UnsupportedIacResource);
         }
     }
     match &mut request.desired {
+        Some(ResourceConfiguration::ServiceOtlp(config)) => {
+            service_otlp::validate(config)?;
+            if request.resource.as_ref().is_some_and(|target| {
+                target.kind != "service_otlp" || target.id != config.service_id.to_string()
+            }) {
+                return Err(PersistenceError::InvalidIacOwner);
+            }
+        }
         Some(ResourceConfiguration::SecurityGroup(config)) => {
             security_group::validate(config)?;
             if request
@@ -450,6 +470,17 @@ impl Frozen {
         let mut fields = Vec::new();
         let action = match (&self.before, &self.request.desired) {
             (
+                Some(Observation::ServiceOtlp(before)),
+                Some(ResourceConfiguration::ServiceOtlp(desired)),
+            ) => {
+                fields = service_otlp::differences(before, desired);
+                if fields.is_empty() {
+                    ResourcePlanAction::Noop
+                } else {
+                    ResourcePlanAction::Update
+                }
+            }
+            (
                 Some(Observation::SecurityGroup(before)),
                 Some(ResourceConfiguration::SecurityGroup(desired)),
             ) => {
@@ -545,7 +576,7 @@ fn read(conn: &Connection, id: Uuid) -> Result<Option<Frozen>, PersistenceError>
     if frozen.request.operation_id != id
         || !matches!(
             frozen.ownership.resource.kind.as_str(),
-            "shell" | "ai_model" | "sandbox_access" | "secret" | "security_group"
+            "shell" | "ai_model" | "sandbox_access" | "secret" | "security_group" | "service_otlp"
         )
         || frozen.ownership.endpoint_id != frozen.request.expected_endpoint_id
         || frozen.revision.is_nil()
@@ -553,6 +584,7 @@ fn read(conn: &Connection, id: Uuid) -> Result<Option<Frozen>, PersistenceError>
         || fingerprint(&frozen.request)? != expected
         || frozen.request.desired.as_ref().is_some_and(|desired|desired.kind()!=frozen.ownership.resource.kind
             || matches!(desired,ResourceConfiguration::AiModel(config) if config.project_id.to_string()!=frozen.ownership.resource.id)
+            || matches!(desired,ResourceConfiguration::ServiceOtlp(config) if config.service_id.to_string()!=frozen.ownership.resource.id)
             || matches!(desired,ResourceConfiguration::SandboxAccess(config) if config.principal.to_string()!=frozen.ownership.resource.id))
         || frozen
             .request
@@ -637,6 +669,10 @@ impl Store {
             .resource
             .clone()
             .unwrap_or_else(|| match &request.desired {
+                Some(ResourceConfiguration::ServiceOtlp(config)) => ManagedResource {
+                    kind: "service_otlp".into(),
+                    id: config.service_id.to_string(),
+                },
                 Some(ResourceConfiguration::AiModel(config)) => ManagedResource {
                     kind: "ai_model".into(),
                     id: config.project_id.to_string(),
@@ -823,6 +859,7 @@ impl Store {
             (None, ResourcePlanAction::Delete) => {
                 deletable(&tx, target)?;
                 match target.kind.as_str() {
+                    "service_otlp" => service_otlp::remove(&tx, target)?,
                     "security_group" => security_group::remove(&tx, target)?,
                     "shell" => {
                         tx.execute(
@@ -850,6 +887,11 @@ impl Store {
                     _ => return Err(PersistenceError::UnsupportedIacResource),
                 }
                 revision = None;
+            }
+            (Some(ResourceConfiguration::ServiceOtlp(desired)), action)
+                if action != ResourcePlanAction::Noop =>
+            {
+                service_otlp::write(&tx, target, desired, now)?;
             }
             (Some(ResourceConfiguration::SecurityGroup(desired)), action)
                 if action != ResourcePlanAction::Noop =>
@@ -896,6 +938,11 @@ impl Store {
             (Some(_), ResourcePlanAction::Noop) => (),
             _ => return Err(PersistenceError::IacOperationIdentity),
         }
+        let configuration_generation = if target.kind == "service_otlp" {
+            service_otlp::generation(&tx, target)?
+        } else {
+            None
+        };
         let ownership = save_owner(
             &tx,
             &frozen.ownership,
@@ -919,7 +966,7 @@ impl Store {
                 state: NativeOperationState::Succeeded,
                 error_code: None,
                 execution_generation: 0,
-                configuration_generation: None,
+                configuration_generation,
                 retain_disks: None,
             },
         )?;

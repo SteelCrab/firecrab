@@ -34,6 +34,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Add shared local service OTLP plans with explicit consent, unchanged-session
+  no-ops, immutable receipts and metadata-only observation. Recheck service
+  environment conflicts in each setting/edit/admission transaction and preserve
+  the borrowed service and local history when removing export configuration.
+
 - Add shared security-group plans with ordered rules, borrowed network authority,
   inactive-runtime checks and immutable completion receipts. Fence native writers
   in SQLite and retain exact Sandbox parent-generation authority for child groups.

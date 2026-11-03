@@ -72,6 +72,17 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
     let capabilities = call(&app, "GET", "/api/iac/identity", Value::Null).await;
     assert_eq!(capabilities.0, StatusCode::OK);
     assert_eq!(
+        capabilities.1["resourcePlanKinds"],
+        json!([
+            "shell",
+            "ai_model",
+            "sandbox_access",
+            "secret",
+            "security_group",
+            "service_otlp"
+        ])
+    );
+    assert_eq!(
         capabilities.1["inventoryKinds"].as_array().unwrap().len(),
         43
     );

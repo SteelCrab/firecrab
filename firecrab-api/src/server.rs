@@ -1066,7 +1066,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/micro-services/{id}/observability/otlp",
-            axum::routing::put(crate::service_observation::configure),
+            get(crate::service_observation::settings).put(crate::service_observation::configure),
         )
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))

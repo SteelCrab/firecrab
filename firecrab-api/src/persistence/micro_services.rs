@@ -219,6 +219,7 @@ impl Store {
             return Err(PersistenceError::IacOwnershipConflict);
         }
         super::iac_auto_deploy::policy_change(&tx, service)?;
+        super::otlp_config::validate_persisted_spec(&tx, service.id, &service.spec)?;
         let changed = tx
             .execute(
                 "UPDATE micro_services SET name = ?2, spec = ?3 WHERE id = ?1",
@@ -402,6 +403,13 @@ impl Store {
         }
         if let Some(admission) = admission {
             super::ci_deploy::admit(&tx, deployment, admission)?;
+        }
+        if admission.is_some() || automatic.is_some() {
+            super::otlp_config::validate_persisted_spec(
+                &tx,
+                deployment.service_id,
+                &deployment.spec,
+            )?;
         }
         let previous = super::service_observation::previous(&tx, deployment.service_id)?;
         let mut observation = deployment.clone();

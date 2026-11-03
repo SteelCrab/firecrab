@@ -490,7 +490,8 @@ async fn iac_resource_plan_http_uses_verified_operator_identity_and_returns_no_s
             "ai_model",
             "sandbox_access",
             "secret",
-            "security_group"
+            "security_group",
+            "service_otlp"
         ])
     );
     let target = receipt["ownership"]["resource"]["id"].as_str().unwrap();

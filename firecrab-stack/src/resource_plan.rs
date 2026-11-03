@@ -25,6 +25,8 @@ pub enum ResourceConfiguration {
     Secret(SecretConfiguration),
     /// Complete ordered IPv4 allow policy on one immutable network identity.
     SecurityGroup(SecurityGroupConfiguration),
+    /// Explicit local service telemetry export; null endpoint disables it.
+    ServiceOtlp(ServiceOtlpConfiguration),
 }
 
 impl ResourceConfiguration {
@@ -36,8 +38,26 @@ impl ResourceConfiguration {
             Self::SandboxAccess(_) => "sandbox_access",
             Self::Secret(_) => "secret",
             Self::SecurityGroup(_) => "security_group",
+            Self::ServiceOtlp(_) => "service_otlp",
         }
     }
+}
+
+/// Independent, opt-in collector configuration for an existing local service.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServiceOtlpConfiguration {
+    /// Existing local service UUID; this setting does not create a service.
+    pub service_id: Uuid,
+    /// Credential-free HTTP(S) base URL, or explicit null to disable export.
+    #[serde(deserialize_with = "explicit_endpoint")]
+    pub endpoint: Option<String>,
+}
+
+fn explicit_endpoint<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(deserializer)
 }
 
 /// Saved policy configuration; rules activate when an affected VM next starts.

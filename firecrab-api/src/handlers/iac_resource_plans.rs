@@ -108,7 +108,7 @@ async fn execute(
     let kind = plan
         .as_ref()
         .map(|plan| plan.ownership.resource.kind.as_str());
-    let _services = if matches!(kind, Some("secret" | "security_group")) {
+    let _services = if matches!(kind, Some("secret" | "security_group" | "service_otlp")) {
         Some(state.service_mutations.clone().lock_owned().await)
     } else {
         None
@@ -144,6 +144,21 @@ async fn execute(
     } else {
         None
     };
+    let otlp = if kind == Some("service_otlp") {
+        let store = state.store.clone();
+        let observed = input.clone();
+        let preparation = database(request.0, move || {
+            store.resource_plan_otlp_input(id, &observed, crate::secrets::now_ms())
+        })
+        .await?;
+        if let Some(preparation) = preparation {
+            Some(crate::service_observation::prepare_plan(&state, preparation, request.0).await?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let store = state.store.clone();
     let observed = input.clone();
     if let Some((mut source, generation)) = database(request.0, move || {
@@ -166,21 +181,20 @@ async fn execute(
         }
     }
     let private = kind == Some("secret");
-    database(request.0, move || {
+    let store = state.store.clone();
+    let vault = state.secrets.clone();
+    let receipt = database(request.0, move || {
         if private {
-            state.store.apply_vault_resource_plan(
-                &state.secrets,
-                id,
-                &input,
-                crate::secrets::now_ms(),
-            )
+            store.apply_vault_resource_plan(&vault, id, &input, crate::secrets::now_ms())
         } else {
-            state
-                .store
-                .apply_resource_plan(id, &input, crate::secrets::now_ms())
+            store.apply_resource_plan(id, &input, crate::secrets::now_ms())
         }
     })
-    .await
+    .await?;
+    if let Some(prepared) = otlp {
+        crate::service_observation::activate_plan(&state, &receipt, prepared, request.0).await;
+    }
+    Ok(receipt)
 }
 
 #[cfg(test)]
