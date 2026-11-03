@@ -104,3 +104,14 @@ The `sandbox_access` adapter saves the full delegated-host policy and preserves
 borrowed resources. It pins canonical source directories to their physical
 identities before execution. Removal keeps an explicit deny row so the delegated
 certificate cannot bypass Sandbox scope. [Policy lifecycle](iac-sandbox-access.md).
+
+## Verification evidence
+
+The [clean Linux Release record](../assets/iac-548-access-linux-evidence.json)
+identifies the exact source, executable hashes, test totals and Clippy logs.
+The [API/browser record](../assets/iac-548-shared-plans-browser-evidence.json)
+covers six creates and six no-ops through real local HTTP for both manager
+identities, followed by policy removal and recovery of its original acknowledgement.
+Its screenshots use production React and actual SQLite ownership records.
+AI verification metadata is seeded. Complete YAML/provider execution and
+every-row live acceptance remain separate unfinished requirements.

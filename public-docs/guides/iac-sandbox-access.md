@@ -84,3 +84,7 @@ Tests use actual SQLite and local authenticated-router fixtures, including a
 delegated mTLS identity and physical directory replacement.
 They do not claim live remote-worker admission or both-workflow every-row
 acceptance. The #548 integration hold remains in effect.
+
+[Exact Linux verification](../assets/iac-548-access-linux-evidence.json) and
+[local API/browser evidence](../assets/iac-548-shared-plans-browser-evidence.json)
+record their source and fixture limits separately.

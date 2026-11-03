@@ -62,3 +62,6 @@ Local HTTP health fixtures verify service acknowledgement recovery.
 These tests do not claim a real guest boot, live registry access, live provider
 credentials or both-workflow coverage for every inventory row.
 The #548 integration hold remains in effect.
+
+The [Linux Release evidence](../assets/iac-548-stack-secret-linux-evidence.json)
+records the exact original-Secret source and executable/log hashes.
