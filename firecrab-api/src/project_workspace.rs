@@ -1,5 +1,6 @@
 //! Durable project metadata and retained-volume lifecycle. Sandbox keeps task ownership.
 pub(crate) mod backups;
+pub(crate) mod provision;
 mod checkpoint;
 pub(crate) mod db;
 pub(crate) mod editors;
@@ -346,6 +347,7 @@ pub fn routes() -> Router<AppState> {
             "/api/ai-sandbox/projects/{project}/workspace/checkpoints/{checkpoint}",
             get(checkpoint::get).put(checkpoint::create),
         )
+        .merge(provision::routes())
         .merge(files::routes())
         .merge(terminals::routes())
         .merge(views::routes())

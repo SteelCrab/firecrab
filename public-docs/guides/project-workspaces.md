@@ -14,13 +14,28 @@ starting tools that use its mounted folder.
 
 ## Create and reopen
 
-1. Create an ordinary inactive user MicroVM with the existing VM API. The empty AI
-   Canvas screen also offers a VM creation form. It defaults to an installed Ubuntu
-   image, 4 vCPU, 8 GiB RAM and a 16 GiB system disk. These values can be changed.
-   If Ubuntu is unavailable, install it or explicitly select another image; the form
-   does not silently choose a different image. An image that requires a larger disk
-   raises the initial disk size. The form creates a VM only; it does not create or bind
-   a project or data volume, or start the VM.
+The empty AI Canvas screen offers **Create AI Canvas**. Set the new project name,
+workspace volume size and VM settings. The VM form initially selects an installed
+Ubuntu image, 4 vCPU, 8 GiB RAM and a 16 GiB system disk. The workspace volume is
+separate and defaults to 1 GiB. Both sizes can be changed. If Ubuntu is unavailable,
+install it or explicitly select another image.
+
+After VM creation succeeds, the controller creates a new Sandbox project and an
+operation-owned data volume. It binds the volume, starts the VM and verifies the
+workspace mount. The browser keeps the setup identity so a refresh can resume the
+same project and volume. A failed stage shows a retry action; existing resources
+are not replaced. A stopped or failed VM is not silently restarted by retries. A
+completed setup does not restart a VM later stopped by the user.
+
+VM creation still uses the existing non-idempotent VM API. If its response is lost
+before the browser receives the VM ID, the automatic setup cannot identify it.
+Inspect the MicroVM list before trying creation again. The flow creates a **new**
+project; opening an existing project remains a separate action. Live execution,
+interruption and cross-user verification of this flow remain pending.
+
+For manual setup or an existing project:
+
+1. Create an ordinary inactive user MicroVM with the existing VM API.
 2. Save an AI Sandbox project selecting that VM. `sourcePath` may select an authorized
    source directory on the API host, or be absent for an empty workspace.
 3. Create a named data volume with `firecrab volume create NAME --size 1`. This volume

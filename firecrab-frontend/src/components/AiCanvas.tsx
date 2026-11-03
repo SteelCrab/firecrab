@@ -37,8 +37,37 @@ import ProjectBackups from "./ProjectBackups";
 import CreateVm from "./CreateVm";
 import AppDialog from "./ui/AppDialog";
 import { agentDocument } from "../canvas/agent-types";
+import { request, message, pause, WorkspaceError } from "../canvas/request";
 
 type Props = { onUnsavedChange: (dirty: boolean) => void };
+type Provision = {
+  operation: string;
+  vmId: string;
+  name: string;
+  volumeSizeGib: number;
+  tabId: string;
+};
+type ProvisionResult = { projectId: string; phase: string };
+const provisionKey = "firecrab.canvas.provision";
+function loadProvision(): Provision | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(provisionKey) || "null");
+    if (
+      value &&
+      typeof value.operation === "string" &&
+      typeof value.vmId === "string" &&
+      typeof value.name === "string" &&
+      typeof value.tabId === "string" &&
+      Number.isInteger(value.volumeSizeGib) &&
+      value.volumeSizeGib > 0 &&
+      value.volumeSizeGib <= 65535
+    )
+      return value as Provision;
+  } catch {
+    /* Invalid local state is never sent to the server. */
+  }
+  return null;
+}
 const panelIcons = {
   agent: Bot,
   folder: Folder,
@@ -89,7 +118,73 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
   const [savedView, setSavedView] = useState("");
   const [creatingVm, setCreatingVm] = useState(false);
   const [createVmError, setCreateVmError] = useState("");
-  const [createdVm, setCreatedVm] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [volumeSize, setVolumeSize] = useState("1");
+  const [provision, setProvision] = useState<Provision | null>(loadProvision);
+  const [unpersistedProvision, setUnpersistedProvision] =
+    useState<Provision | null>(null);
+  const [provisionError, setProvisionError] = useState("");
+  const [provisioning, setProvisioning] = useState(false);
+  const [provisionRetry, setProvisionRetry] = useState(0);
+  useEffect(() => {
+    if (!provision) return;
+    let cancelled = false;
+    const run = async () => {
+      setProvisioning(true);
+      setProvisionError("");
+      try {
+        let mountRetries = 0;
+        while (!cancelled) {
+          let result: ProvisionResult;
+          try {
+            result = await request<ProvisionResult>(
+              "PUT",
+              `/api/ai-sandbox/canvas/provisions/${encodeURIComponent(provision.operation)}`,
+              {
+                vmId: provision.vmId,
+                name: provision.name,
+                volumeSizeGib: provision.volumeSizeGib,
+              },
+              false,
+            );
+          } catch (error) {
+            if (
+              error instanceof WorkspaceError &&
+              error.code === "workspace_conflict" &&
+              error.message.startsWith(
+                "Guest workspace mount or initialization could not be confirmed",
+              ) &&
+              mountRetries++ < 3
+            ) {
+              await pause(3000);
+              continue;
+            }
+            throw error;
+          }
+          if (cancelled) return;
+          if (result.phase === "ready") {
+            localStorage.removeItem(provisionKey);
+            setProvision(null);
+            await c.start();
+            if (c.current()?.id === provision.tabId)
+              await c.connect(result.projectId);
+            return;
+          }
+          if (result.phase !== "starting")
+            throw new Error("Unexpected Canvas setup state");
+          await pause(2000);
+        }
+      } catch (error) {
+        if (!cancelled) setProvisionError(message(error));
+      } finally {
+        if (!cancelled) setProvisioning(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [provision, provisionRetry]);
   useEffect(() => {
     void c.start();
     terminalSessions.install(c.changed);
@@ -224,7 +319,7 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
           <section className="cw-project-nav">
             <h2>{title(tab)}</h2>
             <small>/workspace/shared</small>
-            <ProjectBackups key={tab.project} project={tab.project}/>
+            <ProjectBackups key={tab.project} project={tab.project} />
             {button(
               () => void c.editor(tab),
               t("Open folder", "폴더 열기"),
@@ -503,20 +598,64 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                 () => void c.connect(project),
                 t("Open project", "프로젝트 열기"),
               )}
-              {button(
-                () => {
-                  setCreateVmError("");
-                  setCreatingVm(true);
-                },
-                t("Create workspace MicroVM", "작업용 MicroVM 만들기"),
-              )}
-              {createdVm && (
-                <p role="status">
-                  {t(
-                    `Created ${createdVm}. Assign it to the project and bind a separate workspace volume before opening the project.`,
-                    `${createdVm} VM을 만들었다. 프로젝트에 VM을 지정하고 별도 작업 볼륨을 연결한 후 프로젝트를 연다.`,
+              {unpersistedProvision ? (
+                <div role="status">
+                  <p>
+                    {t(
+                      `VM ${unpersistedProvision.vmId} was created. Restore browser storage and retry setup.`,
+                      `VM ${unpersistedProvision.vmId}을 만들었다. 브라우저 저장소를 복구한 뒤 생성을 재시도한다.`,
+                    )}
+                  </p>
+                  {button(
+                    () => {
+                      try {
+                        localStorage.setItem(
+                          provisionKey,
+                          JSON.stringify(unpersistedProvision),
+                        );
+                        setProvision(unpersistedProvision);
+                        setUnpersistedProvision(null);
+                      } catch {
+                        setProvisionError(
+                          t(
+                            "Browser storage is unavailable.",
+                            "브라우저 저장소를 사용할 수 없다.",
+                          ),
+                        );
+                      }
+                    },
+                    t("Retry workspace setup", "작업 공간 생성 재시도"),
                   )}
-                </p>
+                  {provisionError && <p role="alert">{provisionError}</p>}
+                </div>
+              ) : provision ? (
+                <div role="status">
+                  <p>
+                    {provisioning
+                      ? t(
+                          "Creating the project, volume and VM workspace…",
+                          "프로젝트와 볼륨을 연결하고 VM을 시작한다…",
+                        )
+                      : t(
+                          "Workspace setup needs attention.",
+                          "작업 공간 생성 상태를 확인한다.",
+                        )}
+                  </p>
+                  {provisionError && <p role="alert">{provisionError}</p>}
+                  {!provisioning &&
+                    button(
+                      () => setProvisionRetry((value) => value + 1),
+                      t("Retry workspace setup", "작업 공간 생성 재시도"),
+                    )}
+                </div>
+              ) : (
+                button(
+                  () => {
+                    setCreateVmError("");
+                    setCreatingVm(true);
+                  },
+                  t("Create AI Canvas", "AI Canvas 만들기"),
+                )
               )}
               <a
                 href="https://github.com/SteelCrab/firecrab/blob/feat/550-ai-canvas/public-docs/guides/project-workspaces.md"
@@ -531,7 +670,7 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
             <div className="cw-empty">
               <h1>{t("Opening project", "프로젝트 여는 중")}</h1>
               <p>{tab.error}</p>
-              <ProjectBackups key={tab.project} project={tab.project}/>
+              <ProjectBackups key={tab.project} project={tab.project} />
               {button(
                 () => void c.open(tab),
                 t("Retry connection", "다시 연결"),
@@ -670,15 +809,103 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
               "Ubuntu, 4 vCPU, 메모리 8 GiB, 시스템 디스크 16 GiB를 기본값으로 사용한다. 작업 볼륨은 별도다.",
             )}
           </p>
+          <label htmlFor="cw-create-project">
+            {t("Project name", "프로젝트 이름")}
+          </label>
+          <input
+            id="cw-create-project"
+            value={projectName}
+            maxLength={200}
+            onChange={(event) => setProjectName(event.target.value)}
+          />
+          <label htmlFor="cw-create-volume">
+            {t("Workspace volume (GiB)", "작업 볼륨 (GiB)")}
+          </label>
+          <input
+            id="cw-create-volume"
+            type="number"
+            min={1}
+            max={65535}
+            value={volumeSize}
+            onChange={(event) => setVolumeSize(event.target.value)}
+          />
+          <p>
+            {t(
+              "A new project and workspace volume are created after the VM.",
+              "VM 생성 후 새 프로젝트와 작업 볼륨을 만든다.",
+            )}
+          </p>
           {createVmError && <p role="alert">{createVmError}</p>}
           <CreateVm
             initialResources={{ cpu: 4, ram: 8192, diskGb: 16 }}
             preferredImageFamily="ubuntu"
+            hideDataVolumes
+            beforeCreate={() => {
+              const size = Number(volumeSize);
+              if (!Number.isInteger(size) || size < 1 || size > 65535) {
+                setCreateVmError(
+                  t(
+                    "Set a workspace volume size between 1 and 65535 GiB.",
+                    "작업 볼륨 크기를 1~65535 GiB로 정한다.",
+                  ),
+                );
+                return false;
+              }
+              if (
+                new TextEncoder().encode(projectName.trim()).length > 200 ||
+                /\p{Cc}/u.test(projectName)
+              ) {
+                setCreateVmError(
+                  t(
+                    "Use a project name up to 200 bytes without control characters.",
+                    "프로젝트 이름은 제어 문자를 제외하고 200바이트 이하로 입력한다.",
+                  ),
+                );
+                return false;
+              }
+              try {
+                const key = `${provisionKey}.probe`;
+                localStorage.setItem(key, "1");
+                localStorage.removeItem(key);
+              } catch {
+                setCreateVmError(
+                  t(
+                    "Browser storage is required to resume setup.",
+                    "생성 과정을 재개하려면 브라우저 저장소가 필요하다.",
+                  ),
+                );
+                return false;
+              }
+              setCreateVmError("");
+              return true;
+            }}
             onCancel={() => setCreatingVm(false)}
-            onError={setCreateVmError}
+            onError={(error) =>
+              setCreateVmError(
+                `${error} ${t("If the VM creation response was lost, inspect the MicroVM list before retrying.", "VM 생성 응답이 끊겼다면 다시 시도하기 전에 MicroVM 목록을 확인한다.")}`,
+              )
+            }
             onCreated={(vm) => {
-              setCreatedVm(vm.name);
+              const next: Provision = {
+                operation: crypto.randomUUID(),
+                vmId: vm.id,
+                name: projectName.trim() || vm.name,
+                volumeSizeGib: Number(volumeSize),
+                tabId: tab?.id || "",
+              };
               setCreatingVm(false);
+              try {
+                localStorage.setItem(provisionKey, JSON.stringify(next));
+                setProvision(next);
+              } catch {
+                setUnpersistedProvision(next);
+                setProvisionError(
+                  t(
+                    "Browser storage is unavailable.",
+                    "브라우저 저장소를 사용할 수 없다.",
+                  ),
+                );
+              }
             }}
           />
         </AppDialog>

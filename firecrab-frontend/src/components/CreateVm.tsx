@@ -59,6 +59,8 @@ interface CreateVmProps {
   onCancel?: () => void;
   initialResources?: { cpu: number; ram: number; diskGb: number };
   preferredImageFamily?: "ubuntu";
+  hideDataVolumes?: boolean;
+  beforeCreate?: () => boolean;
 }
 
 function storageLabel(root: StorageRootResponse): string {
@@ -89,6 +91,8 @@ export default function CreateVm({
   onCancel,
   initialResources,
   preferredImageFamily,
+  hideDataVolumes = false,
+  beforeCreate,
 }: CreateVmProps) {
   const { t } = useI18n();
   const host = useHostStatus();
@@ -293,7 +297,7 @@ export default function CreateVm({
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!canSubmit) return;
+    if (!canSubmit || (beforeCreate && !beforeCreate())) return;
 
     // Incomplete rows must block submission, not be silently dropped — a
     // dropped row would leave the user believing a rule was created when it
@@ -445,7 +449,9 @@ export default function CreateVm({
                 <option value="">{imageHint}</option>
               ) : (
                 <>
-                  <option value="">{t("Choose an image", "이미지 선택")}</option>
+                  <option value="">
+                    {t("Choose an image", "이미지 선택")}
+                  </option>
                   {images.map((image) => (
                     <option key={image.alias} value={image.alias}>
                       {templateLabel(image)}
@@ -679,7 +685,7 @@ export default function CreateVm({
       <details className="form-advanced">
         <summary>{t("Advanced options", "고급 설정")}</summary>
         <div className="advanced-fields">
-          {volumes.length > 0 && (
+          {!hideDataVolumes && volumes.length > 0 && (
             <fieldset className="field field-span-2">
               <legend>{t("Data volumes", "데이터 볼륨")}</legend>
               {volumes.map((volume) => (

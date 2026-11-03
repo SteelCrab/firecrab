@@ -59,6 +59,16 @@ pub async fn create(
     Extension(request): Extension<RequestId>,
     ValidatedJson(req): ValidatedJson<CreateMicroBlockStorageRequest>,
 ) -> Result<(StatusCode, Json<MicroBlockStorageResponse>), AppError> {
+    create_with_id(state, request, req, Uuid::new_v4()).await
+}
+
+/// Reserve an operation-owned volume identity before formatting its filesystem.
+pub(crate) async fn create_with_id(
+    state: AppState,
+    request: RequestId,
+    req: CreateMicroBlockStorageRequest,
+    volume_id: Uuid,
+) -> Result<(StatusCode, Json<MicroBlockStorageResponse>), AppError> {
     let mut fields = BTreeMap::new();
     if req.name.is_empty()
         || req.name.len() > 64
@@ -96,7 +106,7 @@ pub async fn create(
         Uuid::parse_str(&storage_root).ok()
     };
     let volume = MicroBlockStorageResponse {
-        id: Uuid::new_v4(),
+        id: volume_id,
         name: req.name,
         size_gib: req.size_gib,
         storage_root,
