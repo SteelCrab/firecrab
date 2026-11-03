@@ -1,0 +1,50 @@
+{
+  "sourceCommit": "9da8cc5fd17a750f2341ed102ce727d8c7248eec",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-03",
+  "platform": "linux/arm64",
+  "rustVersion": "1.97.1",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "profile": "release",
+  "buildEnvironment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "results": {
+    "tlsStartup": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "vmShim": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    "api": {
+      "passed": 1912,
+      "failed": 0,
+      "ignored": 27
+    }
+  },
+  "artifacts": [
+    {
+      "file": "firecrab_api-ddca5945616d069a",
+      "sha256": "efc7a5391651a31a437e28d00c5eeb566825f08acf853d3c48c9f322b2d59fbb"
+    },
+    {
+      "file": "vm_shim_subcommand-df07976ac27f236c",
+      "sha256": "cc45168018fdbd51b3f11781dda4cdfe51eaf75eefb24439b56ab4ac2e8a2b88"
+    },
+    {
+      "file": "tls_startup-3f0f7ebf2f315d5f",
+      "sha256": "c45db94b430ed61e71cc923bc22a5727242a7c6e42392e5514107c1be06a5121"
+    }
+  ],
+  "logs": {
+    "buildSha256": "b893da7aa344c417a59a5103bd02475944255921d7422281886ef5c17f325b4b",
+    "testSha256": "5edf2537fdb61b9b55c62ecbea57802ae3dbdad7e9c4ad28fd37cabc37dea051",
+    "clippySha256": "a72bdbe33479e5bb13fc5f95b4c7e47d1eece2d7c5f92e3ce14160d400839341"
+  },
+  "scope": "Full Linux Release API/TLS/VM-shim suite and strict Clippy for shared Shell and AI-model configuration plans, original credential-source versions, same-principal refresh fencing, compatible old Shell proofs and retained HTTP workers. Predates the follow-up that skips OAuth readiness dispatch for no-op model plans. AI/OAuth proof tests use local records and fixtures. No every-resource Stack YAML, Terraform provider or live every-row KVM/controller acceptance claimed."
+}
