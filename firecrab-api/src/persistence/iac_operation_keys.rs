@@ -1,7 +1,7 @@
 //! One durable UUID namespace across shared IaC operation families.
 
 use super::PersistenceError;
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 const CONFLICT: &str = "iac_operation_identity_conflict";
 const TABLES: &[(&str, &str)] = &[
@@ -18,7 +18,9 @@ pub(super) fn identity_conflict(error: &rusqlite::Error) -> bool {
 
 /// Preserve historical receipts, including known rejections, before admitting new UUIDs.
 pub(super) fn initialize(conn: &Connection) -> Result<(), PersistenceError> {
-    let tx = conn.unchecked_transaction()?;
+    // Acquire the writer before reading history. Concurrent startup must not
+    // race a deferred read transaction's later lock upgrade.
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS iac_operation_keys (
         operation_id TEXT PRIMARY KEY,
@@ -255,5 +257,27 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn iac_operation_keys_concurrent_store_startup_preserves_the_existing_namespace() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("startup.sqlite");
+        let store = super::super::Store::open(&path).unwrap();
+        let expected = store.iac_endpoint_id().unwrap();
+        let start = Arc::new(Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    super::super::Store::open(&path).and_then(|store| store.iac_endpoint_id())
+                })
+            })
+            .collect();
+        for worker in workers {
+            assert_eq!(worker.join().unwrap().unwrap(), expected);
+        }
     }
 }

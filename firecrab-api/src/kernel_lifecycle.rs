@@ -1,4 +1,5 @@
 //! Kernel workers retain a physical root, source pin and private execution generation.
+use crate::file_lock::FileLock;
 use crate::{
     image_install::{Architecture, ImageInstallTracker},
     oci::{ResolveError, Sha256Digest, kernel},
@@ -90,10 +91,10 @@ impl KernelWork {
     }
 }
 /// A dedicated filesystem lock excludes builders, removers and ownership admission across APIs.
-pub(crate) fn runtime_lock(root: &Path, version: &str) -> Result<File, ResolveError> {
+pub(crate) fn runtime_lock(root: &Path, version: &str) -> Result<FileLock, ResolveError> {
     lock_file(root, version, false)
 }
-fn lock_file(root: &Path, version: &str, shared: bool) -> Result<File, ResolveError> {
+fn lock_file(root: &Path, version: &str, shared: bool) -> Result<FileLock, ResolveError> {
     if crate::kernel_manager::cache_path(version).is_none() {
         return Err(failure("Invalid kernel version"));
     }
@@ -120,7 +121,7 @@ fn lock_file(root: &Path, version: &str, shared: bool) -> Result<File, ResolveEr
         file.try_lock()
     }
     .map_err(|_| failure("Original kernel operation is still executing"))?;
-    Ok(file)
+    Ok(FileLock(file))
 }
 /// A physical artifact namespace cannot silently move between independent API databases.
 fn claim_namespace(file: &File, endpoint: Uuid) -> Result<(), ResolveError> {
@@ -175,7 +176,7 @@ pub(crate) fn authorize_namespace(
 pub(crate) struct KernelArtifactLease {
     relative: PathBuf,
     scope: KernelRootPin,
-    _guard: std::sync::Arc<File>,
+    _guard: std::sync::Arc<FileLock>,
 }
 impl std::fmt::Debug for KernelArtifactLease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -205,7 +206,7 @@ impl KernelArtifactLease {
 fn borrow(
     templates: &TemplateRegistry,
     version: &str,
-    guard: File,
+    guard: FileLock,
 ) -> Result<KernelArtifactLease, ResolveError> {
     let relative = crate::kernel_manager::cache_path(version)
         .ok_or_else(|| failure("Invalid kernel version"))?;
@@ -264,7 +265,7 @@ pub(crate) fn spawn_install(
     store: Store,
     templates: TemplateRegistry,
     intent: KernelIntent,
-    guard: File,
+    guard: FileLock,
     tracker: Option<ImageInstallTracker>,
 ) -> tokio::task::JoinHandle<Result<PathBuf, ResolveError>> {
     tokio::spawn(async move {
@@ -424,7 +425,7 @@ pub(crate) struct KernelPresence {
     root: KernelRootPin,
     artifact: PathBuf,
     fingerprint: [u64; 5],
-    guard: File,
+    guard: FileLock,
 }
 fn fingerprint(path: &Path) -> std::io::Result<[u64; 5]> {
     use std::os::unix::fs::MetadataExt;

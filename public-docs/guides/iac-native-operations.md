@@ -9,6 +9,8 @@ Native operations, ownership changes and Stack applies share one durable UUID na
 An ownership intent and its final receipt use the same ownership UUID.
 Another operation family cannot reuse it, even after its original rows are removed.
 SQLite enforces this across API processes. Existing ambiguous cross-family history is rejected without rewriting receipts.
+Initialization acquires its SQLite writer before reading history, so concurrent API startup does not race a later lock upgrade.
+Image and kernel leases explicitly unlock before descriptor close; unrelated forked children cannot extend a completed lease.
 This does not turn request-ID headers or unrelated transient API actions into managed execution authority.
 
 ## Volume attachment identity

@@ -1,4 +1,5 @@
 //! Physical image publication and private, generation-checked execution authority.
+use crate::file_lock::FileLock;
 use crate::persistence::iac_kernels::KernelRootPin;
 use crate::{
     persistence::{
@@ -20,7 +21,7 @@ fn denied() -> TemplateError {
     TemplateError::ImageMutationDenied
 }
 /// One publication lock protects shared artifact references across every image alias.
-pub(crate) fn lock(templates: &TemplateRegistry) -> Result<File, TemplateError> {
+pub(crate) fn lock(templates: &TemplateRegistry) -> Result<FileLock, TemplateError> {
     use std::os::fd::{AsRawFd, FromRawFd};
     templates.physical_root()?;
     // SAFETY: this registry retains its physical directory; the lock name is fixed.
@@ -41,6 +42,7 @@ pub(crate) fn lock(templates: &TemplateRegistry) -> Result<File, TemplateError> 
         return Err(denied());
     }
     file.try_lock().map_err(|_| denied())?;
+    let file = FileLock(file);
     templates.physical_root()?;
     Ok(file)
 }
@@ -80,7 +82,7 @@ pub(crate) struct ImagePresence {
     /// Distinguish adoption of an existing registration from metadata-only release.
     present: bool,
     /// Exclusive publication/transfer lock held through the logical commit.
-    guard: File,
+    guard: FileLock,
 }
 impl ImagePresence {
     /// Revalidate the exact physical observation without reacquiring the SQLite mutex.
@@ -179,7 +181,7 @@ pub(crate) struct CapturedImage {
     /// Physical directory identity captured with this producer.
     root: KernelRootPin,
     /// Optional shared lock retained across copying and catalog registration.
-    publication: Option<Arc<File>>,
+    publication: Option<Arc<FileLock>>,
 }
 impl CapturedImage {
     /// Reject stale owners, catalog epochs, physical roots and active mutation reservations.
@@ -213,14 +215,14 @@ pub(crate) struct ImageWork {
     /// Original mapped root path, checked against its physical identity.
     current_root: PathBuf,
     /// Physical publication lock retained across the entire supervised operation.
-    _lock: Arc<File>,
+    _lock: Arc<FileLock>,
 }
 impl ImageWork {
     /// Mint a worker only from its admitted intent and already-held physical publication lock.
     pub(crate) fn new(
         templates: &TemplateRegistry,
         intent: ImageIntent,
-        file: File,
+        file: FileLock,
     ) -> Result<Self, TemplateError> {
         let store = templates.iac_store().ok_or_else(denied)?.clone();
         if intent.definition().root != templates.physical_root()? {
@@ -364,7 +366,7 @@ pub(crate) fn capture(
 pub(crate) fn publication_lock(
     templates: &TemplateRegistry,
     alias: &str,
-) -> Result<Option<File>, TemplateError> {
+) -> Result<Option<FileLock>, TemplateError> {
     if let Some(ImageAuthority::Observed(authority)) = templates.image_authority()
         && authority.publication.is_some()
     {

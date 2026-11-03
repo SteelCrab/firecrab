@@ -5,6 +5,7 @@ use super::{
 };
 use crate::{
     error::AppError,
+    file_lock::FileLock,
     image_install::Architecture,
     kernel_lifecycle as runtime,
     oci::kernel,
@@ -238,7 +239,7 @@ fn unused(state: &AppState, version: &str, sha: Option<&str>, rid: Uuid) -> Resu
 fn dispatch_work(
     state: AppState,
     intent: KernelIntent,
-    guard: std::fs::File,
+    guard: FileLock,
 ) -> tokio::task::JoinHandle<Result<(), crate::oci::ResolveError>> {
     if !intent.deleting() {
         let tracker = state.kernel_installs.clone();

@@ -10,6 +10,7 @@ mod console_resize;
 mod console_session;
 mod error;
 mod extract;
+mod file_lock;
 mod firecracker;
 mod guest_agent;
 mod guest_console;

@@ -1,5 +1,6 @@
 //! Durable native image admission, frozen preparation and original-operation recovery.
 use super::{iac, images, stacks::persistence_error};
+use crate::file_lock::FileLock;
 use crate::{
     error::AppError,
     extract::ValidatedJson,
@@ -21,7 +22,7 @@ use axum::{
 use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus, UpdateImageKernelRequest};
 use firecrab_stack::{NativeAction, NativeOperation, NativeOperationState};
 use sha2::{Digest, Sha256};
-use std::{fs::File, io::Read, os::unix::fs::OpenOptionsExt};
+use std::{io::Read, os::unix::fs::OpenOptionsExt};
 use uuid::Uuid;
 
 /// Return actionable original-operation recovery guidance without private failure details.
@@ -605,7 +606,11 @@ async fn import_auth(
     }
 }
 /// Retain admitted work after HTTP disconnect and fence failures through its original execution.
-fn dispatch_work(state: AppState, intent: ImageIntent, guard: File) -> tokio::task::JoinHandle<()> {
+fn dispatch_work(
+    state: AppState,
+    intent: ImageIntent,
+    guard: FileLock,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let original = intent.clone();
         let store = state.store.clone();
@@ -625,7 +630,7 @@ fn dispatch_work(state: AppState, intent: ImageIntent, guard: File) -> tokio::ta
     })
 }
 /// Run only the frozen action; uncertain output remains reserved for original-operation recovery.
-async fn execute(state: &AppState, intent: ImageIntent, guard: File) -> Result<(), ()> {
+async fn execute(state: &AppState, intent: ImageIntent, guard: FileLock) -> Result<(), ()> {
     let work = ImageWork::new(&state.templates, intent.clone(), guard).map_err(|_| ())?;
     let templates = (*state.templates)
         .clone()

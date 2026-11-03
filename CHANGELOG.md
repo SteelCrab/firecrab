@@ -198,6 +198,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Fixed
 
+- Serialize shared operation-key initialization before reading existing history.
+  Explicitly release image/kernel publication locks so forked descriptor copies
+  cannot extend a completed native operation lease.
+
 - Recover an original no-effect host ownership rejection after another API first
   claims the same physical installation, without reading its newer owner state.
 - Wait for the initial pool list before showing New pool, so an empty-list
