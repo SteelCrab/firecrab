@@ -298,7 +298,7 @@ fn an_unknown_conversation_starts_fresh_in_the_same_folder() {
         assert!(agent_start(&calls, before).contains(&format!("'--' '--session-id' '{id}'")));
     }
     assert_eq!(records[2].conversation_id, None);
-    assert!(agent_start(&calls, &codex).ends_with("'--' '-m' 'gpt-test'\""));
+    assert!(agent_start(&calls, &codex).ends_with("'--' '-m' 'gpt-test' '--no-daemon'\""));
     assert_eq!(runtime.status().unwrap()["agents"][2]["recovery"], "fresh");
 }
 

@@ -34,6 +34,15 @@ claude_transcript() {
   done
 }
 
+# Print the rollout name of the Codex thread that the pane's own process holds:
+# thread <agent-id> <pane-id>. The name carries the thread id.
+thread() {
+  pids=$(processes "$2" 2>/dev/null | grep -o '"pid":[0-9]*' | cut -d: -f2)
+  file=
+  codex_rollout
+  [ -z "$file" ] || printf 'FIRECRAB_THREAD %s %s\n' "$1" "${file##*/}"
+}
+
 preview() {
   printf 'FIRECRAB_PREVIEW %s\n' "$1"
   pids=$(processes "$3" 2>/dev/null | grep -o '"pid":[0-9]*' | cut -d: -f2)

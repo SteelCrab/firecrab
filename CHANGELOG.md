@@ -56,9 +56,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 - AI Sandbox sessions work again after their MicroVM stops and starts. The next
   status refresh starts the VM's Herdr runtime and reconnects each open session
-  in its folder. Claude Code continues its saved conversation; Codex starts a new
-  one and the session says so. Waiting tasks are never sent twice, and sign-in or
-  closed sessions are not started again.
+  in its folder. Claude Code and Codex continue their saved conversation; a
+  session without a recorded conversation starts a new one and says so. Waiting
+  tasks are never sent twice, and sign-in or closed sessions are not started again.
+- AI Sandbox starts Codex with `--no-daemon`, so each session's own process holds
+  its conversation. Codex board cards show their latest messages, and a chosen
+  reasoning effort no longer prints the shared background server warning.
 
 ## [0.4.3] - 2026-11-02
 

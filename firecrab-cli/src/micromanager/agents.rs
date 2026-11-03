@@ -62,7 +62,8 @@ pub struct Agent {
     pub request_digest: String,
     #[serde(default)]
     pending_task: Option<PendingTask>,
-    /// The Claude Code conversation id given with `--session-id`. Other CLIs take none.
+    /// The Claude Code conversation id given with `--session-id`, or the Codex thread
+    /// read from the rollout its pane process holds. Other CLIs take none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     conversation_id: Option<Uuid>,
     /// Set when the session came back after a Herdr server restart.
@@ -612,6 +613,7 @@ impl Runtime {
         let records = self.records()?;
         if panes.is_some() {
             self.relaunch_in_background(&records);
+            self.remember_threads_in_background(&records);
         }
         let agents = records
             .iter()

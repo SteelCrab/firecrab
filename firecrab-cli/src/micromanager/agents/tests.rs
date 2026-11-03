@@ -402,8 +402,8 @@ fn a_task_records_the_model_and_effort_it_starts_with() {
     // CLI defaults come from the VM's own settings and are not repeated as flags.
     let (model, effort, launch) = start("codex", "", "");
     assert_eq!((model.as_str(), effort.as_str()), ("gpt-6.1-sol", "xhigh"));
-    assert!(!launch.contains("'--'"), "{launch}");
-    // `-m` keeps Codex on its shared background server; only `-c` leaves it.
+    // Firecrab's Codex runs without the shared background server.
+    assert!(launch.contains("'--' '--no-daemon'"), "{launch}");
     let (_, _, launch) = start("codex", "sample-model", "");
     assert!(launch.contains("'--' '-m' 'sample-model'"), "{launch}");
     assert!(!launch.contains("'-c'"), "{launch}");

@@ -1,10 +1,12 @@
 //! Bring sessions back after the private Herdr server restarts, for example after a
 //! MicroVM stop and start. Herdr restores its saved layout: workspace and pane ids
 //! stay, every terminal is new, and no CLI runs in it. Firecrab rebinds each open
-//! session once, then starts its CLI again. Claude Code continues its conversation;
-//! a CLI without a known conversation id starts a new one in the same folder.
+//! session once, then starts its CLI again. Claude Code and Codex continue their
+//! conversation; a CLI without a known conversation id starts a new one in the same
+//! folder. A Codex thread id is known only from the rollout its own pane process held.
 use super::*;
 use fs2::FileExt;
+use std::{collections::BTreeMap, sync::Mutex};
 
 #[cfg(all(test, unix))]
 mod tests;
@@ -48,13 +50,22 @@ fn waiting(agent: &Agent) -> bool {
     restorable(agent) && agent.recovery == Some(Recovery::Pending)
 }
 
-/// Arguments after `--` in `herdr agent start`. With `resume`, Claude Code continues
-/// the conversation saved under this session's conversation id.
+/// Arguments after `--` in `herdr agent start`. With `resume`, the CLI continues the
+/// conversation saved under this session's conversation id.
 pub(super) fn cli_args(agent: &Agent, resume: bool) -> Vec<String> {
     let mut args = Vec::new();
-    if let Some(conversation) = agent.conversation_id {
-        args.push(if resume { "--resume" } else { "--session-id" }.to_owned());
-        args.push(conversation.to_string());
+    match agent.conversation_id {
+        // Codex names its thread itself; Firecrab only resumes one it recorded.
+        Some(thread) if agent.kind == "codex" => {
+            if resume {
+                args.extend(["resume".to_owned(), thread.to_string()]);
+            }
+        }
+        Some(conversation) => {
+            args.push(if resume { "--resume" } else { "--session-id" }.to_owned());
+            args.push(conversation.to_string());
+        }
+        None => {}
     }
     let (model, effort) = match &agent.chosen {
         Some(chosen) => (chosen.model.as_str(), chosen.effort.as_str()),
@@ -76,6 +87,12 @@ pub(super) fn cli_args(agent: &Agent, resume: bool) -> Vec<String> {
         }
         // Grok Build documents `--effort` but not its levels, so it takes no effort.
     }
+    if agent.kind == "codex" {
+        // Without the shared background server, the pane's own Codex process holds
+        // its rollout. That ties each thread to its session, and `-c` prints no
+        // "Running without the shared background server" warning.
+        args.push("--no-daemon".to_owned());
+    }
     args
 }
 
@@ -86,6 +103,28 @@ fn transcript_check(id: Uuid) -> String {
         r#"for f in "${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}"/projects/*/{id}.jsonl; do if [ -f "$f" ] && grep -Eq '"type": ?"user"' "$f"; then printf found; break; fi; done"#
     )
 }
+
+/// Prints `found` when a Codex rollout of thread `id` holds a user message.
+fn rollout_check(id: Uuid) -> String {
+    format!(
+        r#"for f in "${{CODEX_HOME:-$HOME/.codex}}"/sessions/*/*/*/rollout-*-{id}.jsonl "${{CODEX_HOME:-$HOME/.codex}}"/sessions/*/*/*/rollout-*-{id}_*.jsonl; do if [ -f "$f" ] && grep -Eq '"type":"(user_message|UserMessage)"' "$f"; then printf found; break; fi; done"#
+    )
+}
+
+/// The thread id in a Codex rollout name: `rollout-<timestamp>-<thread>.jsonl`, or
+/// `rollout-<timestamp>-<thread>_<rollout>.jsonl` after a rewind.
+fn rollout_thread(name: &str) -> Option<Uuid> {
+    let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    if core.get(19..20)? != "-" {
+        return None;
+    }
+    let ids = core.get(20..)?;
+    Uuid::parse_str(ids.split_once('_').map_or(ids, |(thread, _)| thread)).ok()
+}
+
+/// Codex threads are read at most this often, off the request path.
+const THREAD_CHECK: Duration = Duration::from_secs(10);
+static THREADS_CHECKED: Mutex<BTreeMap<PathBuf, Instant>> = Mutex::new(BTreeMap::new());
 
 impl Runtime {
     pub(super) fn lock_file(&self, name: &str) -> Result<fs::File, Error> {
@@ -224,15 +263,16 @@ impl Runtime {
                 continue;
             }
             let resume = match agent.conversation_id {
-                Some(conversation) => match self.has_conversation(conversation) {
+                Some(conversation) => match self.has_conversation(&agent.kind, conversation) {
                     Ok(found) => found,
                     Err(_) => continue,
                 },
                 None => false,
             };
-            if !resume && agent.kind == "claude" {
-                // An unused id, saved before the CLI can start with it.
-                let conversation = Some(Uuid::new_v4());
+            // A fresh Claude Code gets an unused id, saved before the CLI can start
+            // with it. A fresh Codex thread is recorded once its pane holds it.
+            let conversation = (agent.kind == "claude").then(Uuid::new_v4);
+            if !resume && conversation != agent.conversation_id {
                 agent.conversation_id = conversation;
                 self.update(&agent, |a| a.conversation_id = conversation)?;
             }
@@ -248,6 +288,78 @@ impl Runtime {
         }
         Ok(())
     }
+    /// Record the thread of each open Codex session from the rollout that its own pane
+    /// process holds, so a restarted VM can resume it. Off the request path, at most
+    /// once per `THREAD_CHECK`. Codex on the shared server holds no rollout in the pane,
+    /// so such a session stays without a thread.
+    pub(super) fn remember_threads_in_background(&self, records: &[Agent]) {
+        let codex = records
+            .iter()
+            .filter(|a| a.kind == "codex" && restorable(a) && !waiting(a))
+            .cloned()
+            .collect::<Vec<_>>();
+        if self.guest.is_none() || codex.is_empty() {
+            return;
+        }
+        {
+            let mut checked = THREADS_CHECKED
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let now = Instant::now();
+            if checked
+                .get(&self.home)
+                .is_some_and(|at| now.duration_since(*at) < THREAD_CHECK)
+            {
+                return;
+            }
+            checked.insert(self.home.clone(), now);
+        }
+        let runtime = self.clone();
+        std::thread::spawn(move || {
+            let _ = runtime.remember_threads(&codex);
+        });
+    }
+    fn remember_threads(&self, agents: &[Agent]) -> Result<(), Error> {
+        let guest = self
+            .guest
+            .as_ref()
+            .ok_or_else(|| invalid("Select a MicroVM first."))?;
+        let mut script = format!(
+            "processes() {{ {} pane process-info --pane \"$1\"; }}\n{}",
+            self.guest_herdr(),
+            include_str!("preview.sh")
+        );
+        for agent in agents {
+            script.push_str(&format!(
+                "thread {} {}\n",
+                guest::quote(&agent.id.to_string()),
+                guest::quote(&agent.pane_id)
+            ));
+        }
+        let output = guest.shell(&script, Duration::from_secs(20))?;
+        for line in output.lines() {
+            let Some((id, name)) = line
+                .strip_prefix("FIRECRAB_THREAD ")
+                .and_then(|rest| rest.split_once(' '))
+            else {
+                continue;
+            };
+            let (Ok(id), Some(thread)) = (Uuid::parse_str(id), rollout_thread(name)) else {
+                continue;
+            };
+            let Some(agent) = agents.iter().find(|a| a.id == id) else {
+                continue;
+            };
+            if agent.conversation_id != Some(thread) {
+                self.update(agent, |a| {
+                    if a.recovery != Some(Recovery::Pending) {
+                        a.conversation_id = Some(thread);
+                    }
+                })?;
+            }
+        }
+        Ok(())
+    }
     /// Change a record only while it is open and still names the same terminal.
     fn update(&self, agent: &Agent, edit: impl FnOnce(&mut Agent)) -> Result<(), Error> {
         self.change(|records| {
@@ -260,9 +372,13 @@ impl Runtime {
             Ok(())
         })
     }
-    /// Whether Claude Code saved messages under this conversation id.
-    fn has_conversation(&self, id: Uuid) -> Result<bool, Error> {
-        let script = transcript_check(id);
+    /// Whether the CLI saved messages under this conversation id.
+    fn has_conversation(&self, kind: &str, id: Uuid) -> Result<bool, Error> {
+        let script = match kind {
+            "claude" => transcript_check(id),
+            "codex" => rollout_check(id),
+            _ => return Ok(false),
+        };
         let output = match &self.guest {
             Some(guest) => guest.shell(&script, Duration::from_secs(10))?,
             None => Command::new("sh")
