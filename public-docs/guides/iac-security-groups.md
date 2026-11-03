@@ -73,3 +73,7 @@ identity-preserving updates, borrowed-network retention, source-authority drift,
 active VM conflicts, native writer fencing, HTTP execution and original receipt
 recovery. These checks do not establish full YAML/provider or every-row live
 acceptance.
+
+The [clean Linux record](../assets/iac-548-five-plans-linux-evidence.json) pins
+the exact source, executables, test totals and strict Clippy logs. It includes
+the actual Sandbox parent-generation fixtures.
