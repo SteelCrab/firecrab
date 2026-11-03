@@ -1,85 +1,80 @@
 import { managerEndpoint } from "./manager";
 import { agentRequest, AgentRequestError } from "./agents";
 
-export type SkillLicense = "apache2" | "proprietary" | "unknown";
-export type SkillReason =
-  | null
-  | "proprietary"
-  | "unknown-license"
-  | "unsupported-files"
-  | "too-large";
-export type StoreSkill = {
+/** The pinned Vercel Skills CLI release the MicroVM runs. */
+export const SKILLS_CLI = "skills@1.7.6";
+
+export type RegistrySkill = {
   name: string;
-  description: string;
-  license: SkillLicense;
-  importable: boolean;
-  reason: SkillReason;
-  files: string[];
-  preview: string;
-  imported: { commit: string; digest: string } | null;
-  updateAvailable: boolean;
+  skill: string;
+  source: string;
+  installs: number;
 };
-export type SkillCatalog = {
-  repository: string;
-  commit: string | null;
-  error: string | null;
-  skills: StoreSkill[];
+export type SkillSearch = {
+  query: string;
+  count: number;
+  skills: RegistrySkill[];
+};
+export type InstalledSkill = {
+  name: string;
+  source: string | null;
+  agents: string[];
+  status: string;
 };
 export type VmSkills = {
-  enabled: string[];
-  state: "applied" | "pending" | "failed";
-  reason: string | null;
-  clis: { id: string; name: string; installed: boolean }[];
-  conflicts: string[];
+  node: "ready" | "missing";
+  skills: InstalledSkill[];
+};
+export type SkillChange =
+  | { action: "install"; source: string; skill: string }
+  | { action: "remove"; skill: string }
+  | { action: "update" };
+export type SkillAudit = {
+  gen?: string;
+  socket?: string;
+  snyk?: string;
+  details?: string;
+};
+export type SkillChangeResult = {
+  result:
+    | {
+        name?: string;
+        status: string;
+        agents?: string[];
+        security?: SkillAudit | null;
+      }[]
+    | null;
+  installed: VmSkills;
 };
 
-/** The store is shared by every MicroVM, so it lives beside, not under, the VM routes. */
-async function storeRequest<T>(path = "", controllerId?: string): Promise<T> {
+/** skills.sh search runs on the host, so it works before any MicroVM is selected. */
+export async function searchSkills(query: string): Promise<SkillSearch> {
   const resource = managerEndpoint();
   if (!resource)
     throw Error(
-      "The skill store requires this host’s localhost dashboard. Start firecrab service dev on this host.",
+      "Skill search requires this host’s localhost dashboard. Start firecrab service dev on this host.",
     );
-  const post = controllerId !== undefined;
   const response = await fetch(
-    resource.replace(/\/resources$/, "/agents/skills") + path,
-    {
-      method: post ? "POST" : "GET",
-      headers: post
-        ? {
-            "Content-Type": "application/json",
-            "X-Firecrab-Controller-Id": controllerId,
-          }
-        : undefined,
-      body: post ? "{}" : undefined,
-      signal: AbortSignal.timeout(post ? 160000 : 60000),
-    },
+    resource.replace(/\/resources$/, "/agents/skills/search") +
+      `?${new URLSearchParams({ q: query })}`,
+    { signal: AbortSignal.timeout(30000) },
   );
   const value = await response.json().catch(() => null);
   if (!response.ok)
     throw new AgentRequestError(
       typeof value?.error === "string"
         ? value.error
-        : `Skill store returned HTTP ${response.status}`,
+        : `Skill search returned HTTP ${response.status}`,
       response.status,
     );
-  return value as T;
+  return value as SkillSearch;
 }
-
-export const skillCatalog = () => storeRequest<SkillCatalog>();
-
-export const importSkill = (name: string, controllerId: string) =>
-  storeRequest<SkillCatalog>(
-    `/${encodeURIComponent(name)}/import`,
-    controllerId,
-  );
 
 export const vmSkills = (vmId: string, controllerId: string) =>
   agentRequest<VmSkills>("/skills", undefined, controllerId, vmId);
 
-export const setVmSkill = (
+export const changeSkills = (
   vmId: string,
   controllerId: string,
-  name: string,
-  enabled: boolean,
-) => agentRequest<VmSkills>("/skills", { name, enabled }, controllerId, vmId);
+  change: SkillChange,
+) => agentRequest<SkillChangeResult>("/skills", change, controllerId, vmId);

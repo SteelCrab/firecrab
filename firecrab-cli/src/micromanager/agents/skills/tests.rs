@@ -1,8 +1,8 @@
 use super::super::tests::{guest_fixture, shell_replies};
 use super::*;
-use crate::micromanager::skills::source::tests::{Fixture, SHA, standard};
-use crate::micromanager::skills::store::Store;
-use base64::{Engine, engine::general_purpose::STANDARD};
+
+const LIST: &str = "'ls' '-g' '--json'";
+const ADD: &str = "'add' '";
 
 fn calls(root: &Path) -> Vec<String> {
     fs::read_to_string(root.join("remote-calls.jsonl"))
@@ -12,222 +12,183 @@ fn calls(root: &Path) -> Vec<String> {
         .collect()
 }
 
-fn enable(runtime: &Runtime, names: &[&str]) {
-    fs::create_dir_all(&runtime.home).unwrap();
-    fs::write(
-        runtime.home.join("skills.json"),
-        json!({"enabled": names}).to_string(),
-    )
-    .unwrap();
+fn installed_json() -> String {
+    json!([{
+        "name": "webapp-testing",
+        "path": "/root/.agents/skills/webapp-testing",
+        "scope": "global",
+        "agents": ["Claude Code", "Codex", "Gemini CLI"],
+        "source": "anthropics/skills",
+        "sourceUrl": "https://github.com/anthropics/skills.git",
+        "sourceType": "github",
+        "status": "tracked"
+    }])
+    .to_string()
+}
+
+fn install(source: &str, skill: &str) -> Change {
+    Change::Install {
+        source: source.into(),
+        skill: skill.into(),
+    }
 }
 
 #[test]
-fn set_skill_saves_target_and_reports_pending_when_vm_is_unreachable() {
-    let fixture = Fixture::start();
-    standard(&fixture, SHA, "x");
-    let home = tempfile::tempdir().unwrap();
-    Store::new(home.path())
-        .import(&fixture.source(), "webapp-testing")
-        .unwrap();
-    let vm = Uuid::new_v4();
-    let value = set_vm_skill(home.path(), vm, "webapp-testing", true).unwrap();
-    assert_eq!(value["state"], "pending");
-    assert!(value["reason"].is_string());
-    assert_eq!(value["enabled"], json!(["webapp-testing"]));
-    let saved: Value = serde_json::from_slice(
-        &fs::read(
-            home.path()
-                .join(format!("runtime/agents/microvms/{vm}/skills.json")),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(saved["enabled"], json!(["webapp-testing"]));
-    let off = set_vm_skill(home.path(), vm, "webapp-testing", false).unwrap();
-    assert_eq!(off["enabled"], json!([]));
-}
-
-#[test]
-fn set_skill_rejects_names_that_were_never_imported() {
-    let home = tempfile::tempdir().unwrap();
-    assert!(set_vm_skill(home.path(), Uuid::new_v4(), "webapp-testing", true).is_err());
-}
-
-#[test]
-fn sync_sends_archive_once_and_reports_applied() {
+fn installed_reports_missing_node_without_installing_it() {
     let (root, runtime) = guest_fixture(true);
-    let fixture = Fixture::start();
-    standard(&fixture, SHA, "print('run')\n");
-    Store::new(&runtime.skills_home)
-        .import(&fixture.source(), "webapp-testing")
+    shell_replies(
+        root.path(),
+        json!({LIST: {"out": "FIRECRAB_NODE_MISSING\n"}}),
+    );
+    let value = runtime.installed_skills().unwrap();
+    assert_eq!(value, json!({"node": "missing", "skills": []}));
+    let script = calls(root.path()).pop().unwrap();
+    assert!(!script.contains("nodejs.org"), "{script}");
+}
+
+#[test]
+fn installed_lists_global_skills_from_the_cli() {
+    let (root, runtime) = guest_fixture(true);
+    shell_replies(root.path(), json!({LIST: {"out": installed_json()}}));
+    let value = runtime.installed_skills().unwrap();
+    assert_eq!(value["node"], "ready");
+    assert_eq!(
+        value["skills"],
+        json!([{
+            "name": "webapp-testing",
+            "source": "anthropics/skills",
+            "agents": ["Claude Code", "Codex", "Gemini CLI"],
+            "status": "tracked"
+        }])
+    );
+    let script = calls(root.path()).pop().unwrap();
+    assert!(
+        script.contains(&format!("npx -y {CLI} 'ls' '-g' '--json'")),
+        "{script}"
+    );
+    assert!(script.contains("cd /root"), "{script}");
+}
+
+#[test]
+fn install_runs_the_pinned_cli_for_every_supported_agent() {
+    let (root, runtime) = guest_fixture(true);
+    shell_replies(
+        root.path(),
+        json!({
+            ADD: {"out": json!([{
+                "name": "webapp-testing", "status": "installed", "source": "anthropics/skills",
+                "agents": ["Claude Code", "Codex"],
+                "security": {"gen": "low", "socket": "0 alerts", "snyk": "low", "details": "https://skills.sh/anthropics/skills"}
+            }]).to_string()},
+            LIST: {"out": installed_json()},
+        }),
+    );
+    let value = runtime
+        .change_skills(install("anthropics/skills", "webapp-testing"))
         .unwrap();
-    enable(&runtime, &["webapp-testing"]);
-    let value = runtime.sync_skills().unwrap();
-    assert_eq!(value["state"], "applied", "{value}");
-    let transfers: Vec<_> = calls(root.path())
+    assert_eq!(value["result"][0]["status"], "installed");
+    assert_eq!(value["result"][0]["security"]["snyk"], "low");
+    assert_eq!(value["installed"]["skills"][0]["name"], "webapp-testing");
+    let script = calls(root.path())
         .into_iter()
-        .filter(|c| c.contains("tar -x"))
-        .collect();
-    assert_eq!(transfers.len(), 1);
-    let bytes = fs::read(root.path().join("remote-stdin-0.bin")).unwrap();
-    let mut archive = tar::Archive::new(bytes.as_slice());
-    let paths: Vec<String> = archive
-        .entries()
-        .unwrap()
-        .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
-        .collect();
-    assert!(paths.contains(&"webapp-testing/scripts/run.py".to_owned()));
-    assert!(paths.contains(&"webapp-testing/.firecrab-skill".to_owned()));
+        .find(|c| c.contains(ADD))
+        .unwrap();
+    assert!(
+        script.contains(&format!(
+            "npx -y {CLI} 'add' 'anthropics/skills' '--skill' 'webapp-testing' '-g' '-a' 'claude-code' 'codex' 'gemini-cli' 'opencode' 'github-copilot' 'cursor' '-y' '--json'"
+        )),
+        "{script}"
+    );
+    assert!(
+        script.contains("https://nodejs.org/dist/latest-v24.x"),
+        "{script}"
+    );
+    assert!(script.contains("sha256sum -c"), "{script}");
 }
 
 #[test]
-fn sync_skips_transfer_when_vm_record_matches() {
+fn install_rejects_unsafe_input_without_a_remote_call() {
     let (root, runtime) = guest_fixture(true);
-    let fixture = Fixture::start();
-    standard(&fixture, SHA, "x");
-    let imported = Store::new(&runtime.skills_home)
-        .import(&fixture.source(), "webapp-testing")
-        .unwrap();
-    enable(&runtime, &["webapp-testing"]);
-    let record = json!({"skills":[{"name":"webapp-testing","digest":imported.digest}]});
+    for change in [
+        install("owner/repo; rm -rf /", "x"),
+        install("https://example.com/x", "x"),
+        install("owner/repo", "-rf"),
+        install("owner/repo", "a$(id)"),
+        Change::Remove {
+            skill: "--all".into(),
+        },
+    ] {
+        assert!(runtime.change_skills(change).is_err());
+    }
+    assert!(calls(root.path()).is_empty());
+}
+
+#[test]
+fn install_failure_reports_the_cli_error() {
+    let (root, runtime) = guest_fixture(true);
     shell_replies(
         root.path(),
-        json!({"head -c 65536 /root/.local/share/firecrab/skills.json": {
-            "out": STANDARD.encode(record.to_string())
-        }}),
+        json!({ADD: {"out": json!([{"status": "failed", "error": "No valid skills found"}]).to_string()}}),
     );
-    let value = runtime.sync_skills().unwrap();
-    assert_eq!(value["state"], "applied");
-    assert!(!calls(root.path()).iter().any(|c| c.contains("tar -x")));
+    let error = runtime
+        .change_skills(install("owner/repo", "missing"))
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("No valid skills found"),
+        "{error}"
+    );
 }
 
 #[test]
-fn sync_reports_conflicts_without_failing() {
+fn install_reports_a_vm_failure() {
     let (root, runtime) = guest_fixture(true);
-    let fixture = Fixture::start();
-    standard(&fixture, SHA, "x");
-    Store::new(&runtime.skills_home)
-        .import(&fixture.source(), "webapp-testing")
-        .unwrap();
-    enable(&runtime, &["webapp-testing"]);
     shell_replies(
         root.path(),
-        json!({"tar -x": {"out": "conflict:/root/.claude/skills/webapp-testing\n"}}),
+        json!({ADD: {"err": "Node.js 22.20 or later could not be installed in this MicroVM.", "status": 1}}),
     );
-    let value = runtime.sync_skills().unwrap();
-    assert_eq!(value["state"], "applied");
-    assert_eq!(
-        value["conflicts"],
-        json!(["/root/.claude/skills/webapp-testing"])
-    );
-}
-
-#[test]
-fn sync_failure_is_reported_as_failed_state() {
-    let (root, runtime) = guest_fixture(true);
-    let fixture = Fixture::start();
-    standard(&fixture, SHA, "x");
-    Store::new(&runtime.skills_home)
-        .import(&fixture.source(), "webapp-testing")
+    let error = runtime
+        .change_skills(install("owner/repo", "skill"))
+        .err()
         .unwrap();
-    enable(&runtime, &["webapp-testing"]);
-    shell_replies(
-        root.path(),
-        json!({"tar -x": {"err": "tar: short read", "status": 2}}),
-    );
-    let value = runtime.sync_skills().unwrap();
-    assert_eq!(value["state"], "failed");
-    assert!(value["reason"].as_str().unwrap().contains("short read"));
+    assert!(error.to_string().contains("Node.js 22.20"), "{error}");
 }
 
 #[test]
-fn clis_list_installed_coding_clis() {
-    let (_root, mut runtime) = guest_fixture(true);
-    runtime
-        .guest
-        .as_mut()
-        .unwrap()
-        .available
-        .insert("claude".into());
-    let value = runtime.sync_skills().unwrap();
-    let clis = value["clis"].as_array().unwrap();
-    let find = |id: &str| clis.iter().find(|c| c["id"] == id).cloned();
-    assert_eq!(
-        find("codex").unwrap(),
-        json!({"id":"codex","name":"Codex","installed":true})
-    );
-    assert_eq!(find("claude").unwrap()["installed"], true);
-    assert_eq!(find("gemini").unwrap()["installed"], false);
-    assert!(find("github").is_none());
-}
-
-#[test]
-fn shell_with_input_delivers_stdin() {
+fn remove_and_update_use_the_global_scope() {
     let (root, runtime) = guest_fixture(true);
-    runtime
-        .guest
-        .as_ref()
-        .unwrap()
-        .shell_with_input("cat", b"abc", Duration::from_secs(5))
-        .unwrap();
-    assert_eq!(
-        fs::read(root.path().join("remote-stdin-0.bin")).unwrap(),
-        b"abc"
-    );
-}
-
-#[test]
-fn task_start_syncs_skills_before_creating_the_session() {
-    let (root, runtime) = guest_fixture(true);
-    let fixture = Fixture::start();
-    standard(&fixture, SHA, "x");
-    Store::new(&runtime.skills_home)
-        .import(&fixture.source(), "webapp-testing")
-        .unwrap();
-    enable(&runtime, &["webapp-testing"]);
-    runtime
-        .start_task(TaskStart {
-            id: Uuid::new_v4(),
-            input: "Add tests".into(),
-            cwd: String::new(),
-            repository: "example/project".into(),
-            branch: "main".into(),
-            cli: "codex".into(),
-            model: String::new(),
+    shell_replies(root.path(), json!({LIST: {"out": "[]"}}));
+    let removed = runtime
+        .change_skills(Change::Remove {
+            skill: "webapp-testing".into(),
         })
         .unwrap();
-    let calls = calls(root.path());
-    let sync = calls.iter().position(|c| c.contains("tar -x")).unwrap();
-    let create = calls
-        .iter()
-        .position(|c| c.contains("'workspace' 'create'"))
-        .unwrap();
-    assert!(sync < create);
+    assert_eq!(removed["installed"]["skills"], json!([]));
+    runtime.change_skills(Change::Update).unwrap();
+    let scripts = calls(root.path());
+    assert!(
+        scripts
+            .iter()
+            .any(|c| c.contains(&format!("npx -y {CLI} 'remove' '-g' '-y' 'webapp-testing'")))
+    );
+    assert!(
+        scripts
+            .iter()
+            .any(|c| c.contains(&format!("npx -y {CLI} 'update' '-g' '-y'")))
+    );
 }
 
 #[test]
-fn successful_preparation_syncs_skills_into_new_clis() {
-    let (root, runtime) = guest_fixture(true);
-    fs::create_dir_all(&runtime.home).unwrap();
-    let fixture = Fixture::start();
-    standard(&fixture, SHA, "x");
-    Store::new(&runtime.skills_home)
-        .import(&fixture.source(), "webapp-testing")
-        .unwrap();
-    enable(&runtime, &["webapp-testing"]);
-    shell_replies(
-        root.path(),
-        json!({"timeout 900": {"out": "FIRECRAB_STEP=4\n", "status": 0}}),
+fn change_requests_are_tagged_and_strict() {
+    let parsed: Change = serde_json::from_value(
+        json!({"action": "install", "source": "anthropics/skills", "skill": "pdf"}),
+    )
+    .unwrap();
+    assert!(matches!(parsed, Change::Install { .. }));
+    assert!(serde_json::from_value::<Change>(json!({"action": "update"})).is_ok());
+    assert!(
+        serde_json::from_value::<Change>(json!({"action": "remove", "skill": "x", "extra": 1}))
+            .is_err()
     );
-    runtime.prepare("codex").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let log = loop {
-        let log = fs::read_to_string(runtime.home.join("preparation.log")).unwrap_or_default();
-        if log.contains("FIRECRAB_SKILLS=") || Instant::now() > deadline {
-            break log;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    assert!(log.contains("FIRECRAB_SKILLS=applied"), "{log}");
-    assert!(calls(root.path()).iter().any(|c| c.contains("tar -x")));
+    assert!(serde_json::from_value::<Change>(json!({"action": "run"})).is_err());
 }

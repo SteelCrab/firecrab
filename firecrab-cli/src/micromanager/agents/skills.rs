@@ -1,148 +1,158 @@
-//! Per-MicroVM skill targets and their sync into every coding CLI's user skill folder.
-//! The host keeps the target (enabled names); the VM keeps a record of what it last received.
+//! Agent skills in a MicroVM, managed by the Vercel Skills CLI (`npx skills`).
+//! Skills are installed globally for every coding CLI Firecrab runs, so a CLI installed later
+//! also finds them. Node.js is installed only when a change needs the CLI.
 use super::*;
-use crate::micromanager::skills::store::Store;
-use base64::{Engine, engine::general_purpose::STANDARD};
-use std::collections::BTreeSet;
+use crate::micromanager::skills::registry::{valid_skill, valid_source};
 
-const RECORD: &str = "/root/.local/share/firecrab/skills.json";
+/// Pinned CLI release; `npx -y` fetches exactly this version.
+pub const CLI: &str = "skills@1.7.6";
+/// The CLI's agent names for every coding CLI in `DRIVERS`.
+const AGENTS: [&str; 6] = [
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "opencode",
+    "github-copilot",
+    "cursor",
+];
+const NODE_MISSING: &str = "FIRECRAB_NODE_MISSING";
 
-#[derive(Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct Targets {
-    #[serde(default)]
-    enabled: BTreeSet<String>,
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase", deny_unknown_fields)]
+pub enum Change {
+    Install { source: String, skill: String },
+    Remove { skill: String },
+    Update,
 }
 
-/// The last transfer's outcome, so a matching VM record still reports its conflicts.
-#[derive(Serialize, Deserialize)]
-struct Synced {
-    record: Value,
-    conflicts: Vec<String>,
+/// The CLI needs Node.js 22.20 or later.
+const NODE_OK: &str = r#"node_ok() {
+  command -v node >/dev/null 2>&1 && command -v npx >/dev/null 2>&1 || return 1
+  version=$(node -p 'process.versions.node' 2>/dev/null) || return 1
+  major=${version%%.*}
+  rest=${version#*.}
+  minor=${rest%%.*}
+  [ "$major" -gt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -ge 20 ]; }
+}
+"#;
+
+fn script(body: &str, args: &[&str]) -> String {
+    let args = args
+        .iter()
+        .map(|a| guest::quote(a))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "set -eu\nexport HOME=/root npm_config_update_notifier=false npm_config_fund=false npm_config_audit=false npm_config_loglevel=error\ncd /root\n{NODE_OK}{body}npx -y {CLI} {args}\n"
+    )
 }
 
-fn targets(dir: &Path) -> Result<Targets, Error> {
-    Ok(resource::read(&dir.join("skills.json"))?.unwrap_or_default())
-}
-
-fn vm_dir(home: &Path, vm: Uuid) -> PathBuf {
-    home.join("runtime/agents/microvms").join(vm.to_string())
-}
-
-/// A stopped or unreachable VM keeps its target and reports `pending` instead of failing.
-fn connect_and_sync(home: &Path, vm: Uuid, saved: &Targets) -> Result<Value, Error> {
-    match Runtime::for_vm(home, vm, true) {
-        Ok(runtime) => runtime.sync_skills(),
-        Err(error) => Ok(json!({
-            "enabled": saved.enabled,
-            "state": "pending",
-            "reason": error.to_string(),
-            "clis": [],
-            "conflicts": [],
-        })),
-    }
-}
-
-pub fn vm_skills(home: &Path, vm: Uuid) -> Result<Value, Error> {
-    connect_and_sync(home, vm, &targets(&vm_dir(home, vm))?)
-}
-
-pub fn set_vm_skill(home: &Path, vm: Uuid, name: &str, enabled: bool) -> Result<Value, Error> {
-    if enabled && !Store::new(home).imported()?.iter().any(|i| i.name == name) {
-        return Err(invalid("Import this skill from the store first."));
-    }
-    let dir = vm_dir(home, vm);
-    let mut saved = targets(&dir)?;
-    if enabled {
-        saved.enabled.insert(name.to_owned());
-    } else {
-        saved.enabled.remove(name);
-    }
-    resource::write(&dir.join("skills.json"), &saved)?;
-    connect_and_sync(home, vm, &saved)
+/// The JSON value the CLI printed, after any lines npx wrote before it.
+fn json_output(output: &str) -> Result<Value, Error> {
+    let start = output
+        .find(['[', '{'])
+        .ok_or_else(|| invalid("The skills CLI returned no result."))?;
+    serde_json::from_str(output[start..].trim())
+        .map_err(|_| invalid("The skills CLI returned an invalid result."))
 }
 
 impl Runtime {
-    /// Bring the VM's CLI skill folders to the saved target. Transfer errors become `failed`.
-    pub(super) fn sync_skills(&self) -> Result<Value, Error> {
-        let guest = self
-            .guest
+    fn skills_guest(&self) -> Result<&guest::Guest, Error> {
+        self.guest
             .as_ref()
-            .ok_or_else(|| invalid("Select a MicroVM first."))?;
-        let saved = targets(&self.home)?;
-        let store = Store::new(&self.skills_home);
-        let wanted: Vec<_> = store
-            .imported()?
+            .ok_or_else(|| invalid("Select a MicroVM first."))
+    }
+
+    /// Global skills as the CLI reports them. A VM without Node.js has none, and gets no Node.js.
+    pub fn installed_skills(&self) -> Result<Value, Error> {
+        let output = self.skills_guest()?.shell_capture(
+            &script(
+                &format!("node_ok || {{ printf '{NODE_MISSING}\\n'; exit 0; }}\n"),
+                &["ls", "-g", "--json"],
+            ),
+            Duration::from_secs(90),
+            1024 * 1024,
+        )?;
+        if output.contains(NODE_MISSING) {
+            return Ok(json!({"node": "missing", "skills": []}));
+        }
+        let skills: Vec<Value> = json_output(&output)?
+            .as_array()
             .into_iter()
-            .filter(|i| saved.enabled.contains(&i.name))
-            .collect();
-        let record = json!({"skills": wanted
-            .iter()
-            .map(|i| json!({"name": i.name, "digest": i.digest}))
-            .collect::<Vec<_>>()});
-        let clis: Vec<_> = DRIVERS
-            .iter()
-            .filter(|d| d.0 != "github")
-            .map(|(id, name, command)| {
-                json!({"id": id, "name": name, "installed": guest.available.contains(*command)})
+            .flatten()
+            .map(|s| {
+                json!({
+                    "name": s["name"],
+                    "source": s["source"],
+                    "agents": s["agents"],
+                    "status": s["status"],
+                })
             })
             .collect();
-        let mut value = json!({
-            "enabled": saved.enabled,
-            "state": "applied",
-            "reason": null,
-            "clis": clis,
-            "conflicts": [],
-        });
-        let fail = |mut value: Value, error: Error| {
-            value["state"] = json!("failed");
-            value["reason"] = json!(error.to_string());
-            Ok(value)
-        };
-        let current = match guest.shell(
-            &format!("if [ -f {RECORD} ]; then head -c 65536 {RECORD} | base64 -w0; fi"),
-            Duration::from_secs(10),
-        ) {
-            Ok(current) => current,
-            Err(error) => return fail(value, error),
-        };
-        let installed: Option<Value> = STANDARD
-            .decode(current.trim())
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        let last = self.home.join("skills-synced.json");
-        if installed.as_ref() == Some(&record) {
-            if let Some(synced) = resource::read::<Synced>(&last)?
-                && synced.record == record
-            {
-                value["conflicts"] = json!(synced.conflicts);
+        Ok(json!({"node": "ready", "skills": skills}))
+    }
+
+    /// Install, remove or update through the CLI, then report the new global list.
+    pub fn change_skills(&self, change: Change) -> Result<Value, Error> {
+        let guest = self.skills_guest()?;
+        let args: Vec<&str> = match &change {
+            Change::Install { source, skill } => {
+                if !valid_source(source) || !valid_skill(skill) {
+                    return Err(invalid(
+                        "Choose a skill from skills.sh search results to install.",
+                    ));
+                }
+                let mut args = vec![
+                    "add",
+                    source.as_str(),
+                    "--skill",
+                    skill.as_str(),
+                    "-g",
+                    "-a",
+                ];
+                args.extend(AGENTS);
+                args.extend(["-y", "--json"]);
+                args
             }
-            return Ok(value);
-        }
-        let names: Vec<String> = wanted.iter().map(|i| i.name.clone()).collect();
-        let script = format!(
-            "/bin/sh -c {} -- {}",
-            guest::quote(include_str!("skills_sync.sh")),
-            guest::quote(&STANDARD.encode(record.to_string()))
+            Change::Remove { skill } => {
+                if !valid_skill(skill) {
+                    return Err(invalid("Choose an installed skill to remove."));
+                }
+                vec!["remove", "-g", "-y", skill.as_str()]
+            }
+            Change::Update => vec!["update", "-g", "-y"],
+        };
+        let prepare = format!(
+            "{}if ! node_ok; then install_node >&2; fi\nnode_ok || {{ echo 'Node.js 22.20 or later could not be installed in this MicroVM.' >&2; exit 1; }}\n",
+            include_str!("skills_node.sh")
         );
-        match guest.shell_with_input(&script, &store.archive(&names)?, Duration::from_secs(120)) {
-            Ok(output) => {
-                let conflicts: Vec<String> = output
-                    .lines()
-                    .filter_map(|l| l.strip_prefix("conflict:").map(str::to_owned))
-                    .collect();
-                resource::write(
-                    &last,
-                    &Synced {
-                        record,
-                        conflicts: conflicts.clone(),
-                    },
-                )?;
-                value["conflicts"] = json!(conflicts);
-                Ok(value)
+        let output = guest.shell_capture(
+            &script(&prepare, &args),
+            Duration::from_secs(150),
+            1024 * 1024,
+        )?;
+        let result = match change {
+            Change::Install { .. } => {
+                let result = json_output(&output)?;
+                if let Some(failed) = result
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|r| r["status"] != "installed" && r["status"] != "skipped")
+                {
+                    return Err(invalid(format!(
+                        "The skill was not installed: {}",
+                        failed["error"]
+                            .as_str()
+                            .or(failed["reason"].as_str())
+                            .unwrap_or("unknown error")
+                    )));
+                }
+                result
             }
-            Err(error) => fail(value, error),
-        }
+            _ => Value::Null,
+        };
+        Ok(json!({"result": result, "installed": self.installed_skills()?}))
     }
 }
 

@@ -1,5 +1,5 @@
-//! Official skill store: catalog reading, license checks and the host copy.
+//! Skill discovery through the skills.sh registry used by the Vercel Skills CLI.
 //! Nothing here knows about MicroVMs, Herdr or agent sessions.
-pub mod meta;
-pub mod source;
-pub mod store;
+#[cfg(test)]
+pub(crate) mod http_fixture;
+pub mod registry;

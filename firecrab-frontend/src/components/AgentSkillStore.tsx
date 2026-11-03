@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
-import { Check, RefreshCw, Search } from "lucide-react";
+import { useEffect, useState, type FormEvent } from "react";
+import { ExternalLink, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useI18n } from "../i18n";
 import {
-  importSkill,
-  setVmSkill,
-  skillCatalog,
+  SKILLS_CLI,
+  changeSkills,
+  searchSkills,
   vmSkills,
-  type SkillCatalog,
-  type SkillReason,
-  type StoreSkill,
+  type RegistrySkill,
+  type SkillAudit,
+  type SkillChange,
+  type SkillSearch,
   type VmSkills,
 } from "../api/skills";
 import "../styles/agent-skills.css";
@@ -16,7 +17,7 @@ import "../styles/agent-skills.css";
 const message = (failure: unknown) =>
   failure instanceof Error ? failure.message : String(failure);
 
-/** Official skill store: list on the left, the selected skill on the right. */
+/** skills.sh search on the left, the selected skill and this MicroVM's installed skills on the right. */
 export default function AgentSkillStore({
   vmId,
   controllerId,
@@ -24,278 +25,278 @@ export default function AgentSkillStore({
   vmId: string;
   controllerId: string;
 }) {
-  const { t } = useI18n();
-  const [catalog, setCatalog] = useState<SkillCatalog | null>(null);
-  const [vm, setVm] = useState<VmSkills | null>(null);
-  const [selected, setSelected] = useState("");
+  const { t, locale } = useI18n();
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState(false);
-  // Show the requested switch position until the server answers; a failure falls back.
-  const [requested, setRequested] = useState<boolean | null>(null);
+  const [search, setSearch] = useState<SkillSearch | null>(null);
+  const [selected, setSelected] = useState<RegistrySkill | null>(null);
+  const [installed, setInstalled] = useState<VmSkills | null>(null);
+  const [audit, setAudit] = useState<{
+    name: string;
+    security: SkillAudit;
+  } | null>(null);
+  const [busy, setBusy] = useState<"" | "search" | "change">("");
   const [error, setError] = useState("");
 
-  const loadCatalog = useCallback(async () => {
-    try {
-      const next = await skillCatalog();
-      setCatalog(next);
-      setError("");
-    } catch (failure) {
-      setError(message(failure));
-    }
-  }, []);
-  const loadVm = useCallback(async () => {
-    if (!vmId) return;
-    try {
-      setVm(await vmSkills(vmId, controllerId));
-    } catch (failure) {
-      setError(message(failure));
-    }
-  }, [vmId, controllerId]);
-  useEffect(() => {
-    skillCatalog().then(setCatalog, (failure) => setError(message(failure)));
-  }, []);
   useEffect(() => {
     if (vmId)
-      vmSkills(vmId, controllerId).then(setVm, (failure) =>
+      vmSkills(vmId, controllerId).then(setInstalled, (failure) =>
         setError(message(failure)),
       );
   }, [vmId, controllerId]);
 
-  const reasons: Record<Exclude<SkillReason, null>, string> = {
-    proprietary: t(
-      "Proprietary license. Firecrab cannot copy this skill.",
-      "독점 라이선스라서 가져올 수 없어요.",
-    ),
-    "unknown-license": t(
-      "The license could not be confirmed.",
-      "라이선스를 확인할 수 없어 가져올 수 없어요.",
-    ),
-    "unsupported-files": t(
-      "This skill contains unsupported files.",
-      "지원하지 않는 파일이 있어 가져올 수 없어요.",
-    ),
-    "too-large": t(
-      "This skill is too large.",
-      "스킬이 너무 커서 가져올 수 없어요.",
-    ),
-  };
-  const license = (skill: StoreSkill) =>
-    skill.license === "apache2"
-      ? "Apache 2.0"
-      : skill.license === "proprietary"
-        ? t("Proprietary", "독점")
-        : t("Unknown", "확인 불가");
+  const number = (value: number) =>
+    value.toLocaleString(locale === "ko" ? "ko-KR" : "en-US");
 
-  const skills = catalog?.skills || [];
-  const visible = skills.filter((s) =>
-    s.name.toLowerCase().includes(query.trim().toLowerCase()),
-  );
-  const skill =
-    skills.find((s) => s.name === selected) || visible[0] || skills[0] || null;
-  const enabled = !!skill && !!vm?.enabled.includes(skill.name);
-
-  const run = async (work: () => Promise<void>) => {
-    setBusy(true);
+  const run = async (kind: "search" | "change", work: () => Promise<void>) => {
+    setBusy(kind);
     setError("");
     try {
       await work();
     } catch (failure) {
       setError(message(failure));
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   };
-  const importSelected = () =>
-    skill &&
-    run(async () => setCatalog(await importSkill(skill.name, controllerId)));
-  const toggle = async (next: boolean) => {
-    if (!skill) return;
-    setRequested(next);
-    await run(async () =>
-      setVm(await setVmSkill(vmId, controllerId, skill.name, next)),
-    );
-    setRequested(null);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (query.trim().length < 2 || busy) return;
+    void run("search", async () => {
+      const found = await searchSkills(query.trim());
+      setSearch(found);
+      setSelected(found.skills[0] || null);
+    });
   };
+  const change = (next: SkillChange) =>
+    run("change", async () => {
+      const response = await changeSkills(vmId, controllerId, next);
+      setInstalled(response.installed);
+      const first = response.result?.[0];
+      setAudit(
+        first?.security && next.action === "install"
+          ? { name: next.skill, security: first.security }
+          : null,
+      );
+    });
+  const isInstalled = (skill: RegistrySkill) =>
+    !!installed?.skills.some(
+      (s) => s.name === skill.skill && (!s.source || s.source === skill.source),
+    );
 
   return (
     <section className="ask" aria-label={t("Skill store", "스킬 스토어")}>
       <header className="am-quick-heading ask-heading">
         <small>{t("Skill store", "스킬 스토어")}</small>
-        <h2>{t("Official skills", "공식 스킬")}</h2>
-        {catalog && (
-          <p className="ask-source">
-            {t("Official", "공식")} · {catalog.repository}
-            {catalog.commit ? ` · ${catalog.commit.slice(0, 7)}` : ""}
-          </p>
-        )}
+        <h2>{t("Search skills on skills.sh", "skills.sh에서 스킬 찾기")}</h2>
+        <p>
+          {t(
+            "Firecrab installs skills with the Vercel Skills CLI",
+            "Vercel Skills CLI",
+          )}{" "}
+          (<code>{SKILLS_CLI}</code>){" "}
+          {t(
+            "for Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot and Cursor in this MicroVM. Anyone can publish to skills.sh, so check the source before you install.",
+            "로 이 MicroVM의 Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot, Cursor에 설치해요. skills.sh에는 누구나 스킬을 올릴 수 있으니 설치 전에 출처를 확인하세요.",
+          )}
+        </p>
       </header>
-      {(catalog?.error || error) && (
-        <div className="ask-error" role="alert">
-          <span>{catalog?.error || error}</span>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void loadCatalog()}
-          >
-            <RefreshCw aria-hidden="true" />
-            {t("Retry", "다시 시도")}
-          </button>
-        </div>
+      <form className="ask-search" role="search" onSubmit={submit}>
+        <Search aria-hidden="true" />
+        <input
+          type="search"
+          aria-label={t("Search skills.sh", "skills.sh 검색")}
+          value={query}
+          maxLength={100}
+          placeholder={t("react, playwright, pdf…", "react, playwright, pdf…")}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button
+          type="submit"
+          className="btn"
+          disabled={!!busy || query.trim().length < 2}
+        >
+          {t("Search", "검색")}
+        </button>
+      </form>
+      {error && (
+        <p className="ask-error" role="alert">
+          {error}
+        </p>
       )}
       <div className="ask-layout">
-        <nav className="ask-list" aria-label={t("Skills", "스킬 목록")}>
-          <label className="ask-search">
-            <Search aria-hidden="true" />
-            <span className="sr-only">{t("Search skills", "스킬 검색")}</span>
-            <input
-              type="search"
-              value={query}
-              placeholder={t("Search skills…", "스킬 검색…")}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
+        <nav className="ask-list" aria-label={t("Search results", "검색 결과")}>
+          {search && (
+            <p className="ask-count">
+              {t(`${search.count} results`, `검색 결과 ${search.count}개`)} ·
+              skills.sh
+            </p>
+          )}
           <ul>
-            {visible.map((item) => (
-              <li key={item.name}>
+            {search?.skills.map((item) => (
+              <li key={`${item.source}/${item.skill}`}>
                 <button
                   type="button"
-                  aria-label={item.name}
-                  aria-current={item.name === skill?.name ? "true" : undefined}
-                  onClick={() => setSelected(item.name)}
+                  aria-current={
+                    selected?.source === item.source &&
+                    selected.skill === item.skill
+                      ? "true"
+                      : undefined
+                  }
+                  onClick={() => setSelected(item)}
                 >
-                  <span>{item.name}</span>
-                  {item.imported && <Check aria-hidden="true" />}
+                  <span className="ask-name">{item.name}</span>
+                  <small>{item.source}</small>
                 </button>
               </li>
             ))}
           </ul>
         </nav>
-        {skill && (
-          <article className="ask-detail">
-            <div className="ask-title">
-              <h3>{skill.name}</h3>
-              {skill.imported && !skill.updateAvailable ? (
-                <span className="ask-imported">
-                  {t("✓ Imported", "✓ 가져옴")}
-                </span>
+        <div className="ask-side">
+          {selected && (
+            <article className="ask-detail">
+              <h3>{selected.name}</h3>
+              <dl className="ask-facts">
+                <div>
+                  <dt>{t("Source", "출처")}</dt>
+                  <dd>{selected.source}</dd>
+                </div>
+                <div>
+                  <dt>{t("Installs", "설치 수")}</dt>
+                  <dd>{number(selected.installs)}</dd>
+                </div>
+              </dl>
+              <p className="ask-links">
+                <a
+                  href={`https://skills.sh/${selected.source}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  skills.sh <ExternalLink aria-hidden="true" />
+                </a>
+                <a
+                  href={`https://github.com/${selected.source}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  GitHub <ExternalLink aria-hidden="true" />
+                </a>
+              </p>
+              {isInstalled(selected) ? (
+                <p className="ask-done">{t("✓ Installed", "✓ 설치됨")}</p>
               ) : (
                 <button
                   type="button"
                   className="btn primary"
-                  disabled={busy || !skill.importable}
-                  onClick={() => void importSelected()}
+                  disabled={!vmId || !!busy}
+                  onClick={() =>
+                    void change({
+                      action: "install",
+                      source: selected.source,
+                      skill: selected.skill,
+                    })
+                  }
                 >
-                  {skill.updateAvailable
-                    ? t("Update", "업데이트")
-                    : t("Import", "가져오기")}
+                  {t("Install in this MicroVM", "이 MicroVM에 설치")}
                 </button>
               )}
-            </div>
-            {skill.updateAvailable && (
-              <p className="ask-note">
-                {t("Update available", "업데이트 있음")}
-              </p>
-            )}
-            {skill.reason && (
-              <p className="ask-reason">{reasons[skill.reason]}</p>
-            )}
-            <p className="ask-description">{skill.description}</p>
-            <dl className="ask-facts">
-              <div>
-                <dt>{t("Files", "파일")}</dt>
-                <dd>{skill.files.join(" · ")}</dd>
-              </div>
-              <div>
-                <dt>{t("License", "라이선스")}</dt>
-                <dd>{license(skill)}</dd>
-              </div>
-              <div>
-                <dt>{t("Version", "버전")}</dt>
-                <dd>
-                  {(skill.imported?.commit || catalog?.commit || "").slice(
-                    0,
-                    7,
-                  )}{" "}
-                  {skill.imported ? t("(pinned)", "(고정)") : ""}
-                </dd>
-              </div>
-            </dl>
-            {skill.imported && (
-              <div className="ask-workspace">
-                {!vmId ? (
-                  <p>
-                    {t(
-                      "Select a MicroVM to use skills",
-                      "스킬을 쓰려면 MicroVM을 선택하세요",
-                    )}
-                  </p>
-                ) : (
-                  <>
-                    <label className="ask-switch">
-                      <input
-                        type="checkbox"
-                        role="switch"
-                        checked={requested ?? enabled}
-                        disabled={busy || !vm}
-                        onChange={(e) => void toggle(e.target.checked)}
-                      />
-                      <span>
-                        {t("Use in this workspace", "이 작업 공간에서 사용")}
-                      </span>
-                    </label>
-                    {enabled && vm && (
-                      <VmState vm={vm} onRetry={() => void loadVm()} />
-                    )}
-                  </>
+              {!vmId && (
+                <p className="ask-note">
+                  {t(
+                    "Select a MicroVM to install skills",
+                    "스킬을 설치하려면 MicroVM을 선택하세요",
+                  )}
+                </p>
+              )}
+              {busy === "change" && (
+                <p className="ask-note">
+                  {t(
+                    "Working… The first install also sets up Node.js and can take 1–2 minutes.",
+                    "작업 중이에요… 첫 설치는 Node.js도 함께 설치해서 1~2분 걸릴 수 있어요.",
+                  )}
+                </p>
+              )}
+              {audit && audit.name === selected.skill && (
+                <p className="ask-audit">
+                  {t("Security audit", "보안 검사")}:{" "}
+                  {[
+                    audit.security.gen && `Gen ${audit.security.gen}`,
+                    audit.security.socket && `Socket ${audit.security.socket}`,
+                    audit.security.snyk && `Snyk ${audit.security.snyk}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              )}
+            </article>
+          )}
+          {vmId && (
+            <section
+              className="ask-installed"
+              aria-label={t("Installed skills", "설치된 스킬")}
+            >
+              <div className="ask-installed-head">
+                <h3>
+                  {t("Installed in this MicroVM", "이 MicroVM에 설치된 스킬")}{" "}
+                  {installed && `(${installed.skills.length})`}
+                </h3>
+                {!!installed?.skills.length && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!!busy}
+                    onClick={() => void change({ action: "update" })}
+                  >
+                    <RefreshCw aria-hidden="true" />
+                    {t("Update all", "모두 업데이트")}
+                  </button>
                 )}
               </div>
-            )}
-            <pre className="ask-preview">{skill.preview}</pre>
-          </article>
-        )}
+              {installed?.node === "missing" ? (
+                <p className="ask-note">
+                  {t(
+                    "No skills yet. The first install also sets up Node.js in this MicroVM.",
+                    "아직 설치된 스킬이 없어요. 첫 설치 때 Node.js도 함께 설치해요.",
+                  )}
+                </p>
+              ) : installed && installed.skills.length === 0 ? (
+                <p className="ask-note">
+                  {t("No skills installed yet.", "아직 설치된 스킬이 없어요.")}
+                </p>
+              ) : (
+                <ul>
+                  {installed?.skills.map((skill) => (
+                    <li key={skill.name}>
+                      <div>
+                        <strong>{skill.name}</strong>
+                        <small>
+                          {skill.source || t("Unknown source", "출처 모름")}
+                          {skill.agents.length > 0 &&
+                            ` · ${skill.agents.join(", ")}`}
+                        </small>
+                      </div>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        aria-label={t(
+                          `Remove ${skill.name}`,
+                          `${skill.name} 삭제`,
+                        )}
+                        title={t("Remove", "삭제")}
+                        disabled={!!busy}
+                        onClick={() =>
+                          void change({ action: "remove", skill: skill.name })
+                        }
+                      >
+                        <Trash2 aria-hidden="true" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+        </div>
       </div>
     </section>
-  );
-}
-
-function VmState({ vm, onRetry }: { vm: VmSkills; onRetry: () => void }) {
-  const { t } = useI18n();
-  if (vm.state !== "applied")
-    return (
-      <div className="ask-vm" data-state={vm.state}>
-        <p>
-          {vm.state === "pending"
-            ? t("Waiting for this MicroVM", "VM 연결을 기다리는 중")
-            : t("Could not apply skills", "스킬을 적용하지 못했어요")}
-        </p>
-        {vm.reason && <small>{vm.reason}</small>}
-        <button type="button" className="btn" onClick={onRetry}>
-          {t("Retry", "다시 시도")}
-        </button>
-      </div>
-    );
-  return (
-    <div className="ask-vm" data-state="applied">
-      <ul>
-        {vm.clis.map((cli) => (
-          <li key={cli.id}>
-            {cli.installed
-              ? `${cli.name} ✓`
-              : `${cli.name} · ${t("Not installed", "미설치")}`}
-          </li>
-        ))}
-      </ul>
-      {vm.conflicts.map((path) => (
-        <small key={path}>
-          {t(
-            `Skipped ${path}: a skill with this name already exists.`,
-            `${path}에 같은 이름의 스킬이 있어 건너뛰었어요.`,
-          )}
-        </small>
-      ))}
-      <small>
-        {t("Applies to new agent sessions", "새 에이전트 세션부터 적용돼요")}
-      </small>
-    </div>
   );
 }

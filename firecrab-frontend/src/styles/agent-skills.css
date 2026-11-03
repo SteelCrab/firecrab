@@ -3,15 +3,35 @@
   gap: 16px;
   min-width: 0;
 }
-.ask-source {
-  font-family: var(--mono, ui-monospace, Menlo, monospace);
+.ask-heading code {
   font-size: 12px;
 }
-.ask-error {
+.ask-search {
   display: flex;
-  gap: 12px;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px 4px 4px 10px;
+  color: var(--text-3);
+  min-width: 0;
+}
+.ask-search > svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.ask-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--text);
+}
+.ask-error {
+  margin: 0;
   padding: 10px 12px;
   border-radius: 10px;
   background: var(--red-soft);
@@ -20,7 +40,7 @@
 }
 .ask-layout {
   display: grid;
-  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -29,53 +49,31 @@
   border-radius: 12px;
   padding: 8px;
   min-width: 0;
+  max-height: 560px;
+  overflow: auto;
 }
-.ask-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0 8px;
-  margin-bottom: 6px;
+.ask-count {
+  margin: 2px 6px 8px;
   color: var(--text-3);
+  font-size: 12px;
 }
-.ask-search svg {
-  width: 14px;
-  height: 14px;
-}
-.ask-search input {
-  border: 0;
-  background: transparent;
-  padding: 6px 0;
-  min-width: 0;
-  width: 100%;
-  font-size: 13px;
-}
-.ask-list ul {
+.ask-list ul,
+.ask-installed ul {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 .ask-list button {
-  display: flex;
+  display: grid;
+  gap: 2px;
   width: 100%;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
   padding: 8px 10px;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: var(--text);
-  font-family: var(--mono, ui-monospace, Menlo, monospace);
-  font-size: 12.5px;
   text-align: left;
   cursor: pointer;
-}
-.ask-list button span {
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .ask-list button:hover {
   background: var(--bg-hover);
@@ -83,49 +81,39 @@
 .ask-list button[aria-current="true"] {
   background: var(--accent-soft);
 }
-.ask-list button svg {
-  width: 14px;
-  height: 14px;
-  color: var(--green-ink);
-  flex: none;
+.ask-list .ask-name,
+.ask-detail h3,
+.ask-installed strong {
+  font-family: var(--mono, ui-monospace, Menlo, monospace);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
 }
-.ask-detail {
+.ask-list small,
+.ask-installed small {
+  color: var(--text-3);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.ask-side {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.ask-detail,
+.ask-installed {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px 18px;
   min-width: 0;
 }
-.ask-title {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-.ask-title h3 {
-  margin: 0;
-  font-family: var(--mono, ui-monospace, Menlo, monospace);
+.ask-detail h3 {
+  margin: 0 0 8px;
   font-size: 15px;
-  overflow-wrap: anywhere;
-}
-.ask-imported {
-  color: var(--green-ink);
-  font-size: 13px;
-  white-space: nowrap;
-}
-.ask-description,
-.ask-note,
-.ask-reason {
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-2);
-}
-.ask-reason {
-  color: var(--red-ink);
 }
 .ask-facts {
   display: grid;
   gap: 4px;
-  margin: 12px 0;
+  margin: 0 0 10px;
   font-size: 12.5px;
 }
 .ask-facts div {
@@ -141,52 +129,62 @@
   color: var(--text-2);
   overflow-wrap: anywhere;
 }
-.ask-workspace {
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-  font-size: 13px;
+.ask-links {
+  display: flex;
+  gap: 14px;
+  margin: 0 0 12px;
+  font-size: 12.5px;
 }
-.ask-switch {
+.ask-links a {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  cursor: pointer;
+  gap: 4px;
 }
-.ask-vm {
-  display: grid;
-  gap: 6px;
-  margin-top: 10px;
-  color: var(--text-2);
+.ask-links svg {
+  width: 12px;
+  height: 12px;
 }
-.ask-vm ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  list-style: none;
+.ask-done {
   margin: 0;
-  padding: 0;
+  color: var(--green-ink);
+  font-size: 13px;
 }
-.ask-vm[data-state="failed"] p,
-.ask-vm[data-state="failed"] small {
-  color: var(--red-ink);
+.ask-note,
+.ask-audit {
+  margin: 10px 0 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.7;
 }
-.ask-vm .btn {
-  justify-self: start;
+.ask-installed-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
 }
-.ask-preview {
-  margin: 12px 0 0;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--bg-subtle);
-  font-size: 11.5px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 220px;
-  overflow: auto;
+.ask-installed-head h3 {
+  margin: 0;
+  font-size: 13px;
+}
+.ask-installed li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.ask-installed li > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 @media (max-width: 760px) {
   .ask-layout {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .ask-list {
+    max-height: 280px;
   }
 }
