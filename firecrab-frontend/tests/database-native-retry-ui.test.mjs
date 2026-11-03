@@ -28,6 +28,7 @@ async function setup(t) {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   page.setDefaultTimeout(5000);
+  page.setDefaultNavigationTimeout(30_000);
   t.after(async () => {
     await page.close();
     await browser.close();
@@ -37,7 +38,12 @@ async function setup(t) {
     send(200, { endpointId }),
   );
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
-  await page.goto(`${fixture.url}/#/pipe/database`);
+  await page.goto(`${fixture.url}/#/pipe/database`, {
+    waitUntil: "domcontentloaded",
+  });
+  await expect(
+    page.getByRole("button", { name: "Add database", exact: true }),
+  ).toBeVisible();
   return { fixture, page };
 }
 async function fill(page, name = "Requested connection", passwordUri = uri) {
