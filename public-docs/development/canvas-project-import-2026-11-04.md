@@ -13,7 +13,7 @@ The operator CLI now includes `import`, not only export and destination inspecti
 - Require a stopped destination controller, its whole-process database lock, an
   initialized updated schema, a never-started Created user VM and registered storage.
   Source cutover quiescence requires explicit operator acknowledgement.
-- Reject existing project/database/volume identities, paths, task/catalog collisions,
+- Reject existing project/database/volume identities, paths, task identity collisions,
   VM ownership, overlapping mounts and exhausted disk slots. Destination files are
   owner-controlled; no existing resource is replaced.
 - Validate original matched hashes, SQLite identities/integrity, ext4 UUID/length,
@@ -43,9 +43,10 @@ The operator CLI now includes `import`, not only export and destination inspecti
 ## Scope and limits
 
 This is an offline CLI path for a fresh destination project and volume. There is no
-in-place merge, task ordinal remapping or automatic source-host shutdown. The existing
+in-place merge, task identity remapping or automatic source-host shutdown. The existing
 read-only `plan-import` command is preliminary; `import` has stricter admission checks.
-Use a destination with no colliding Sandbox catalog identities. The original source
+Task and attempt UUIDs must not collide with the destination catalog. Project-DB-backed
+history also requires noncolliding catalog ordinals. The original source
 archive stays available as private evidence. External task work directories and old
 migration-source archives are not copied. Models, skills, grants and runtime support
 need destination qualification before new tasks can run.
@@ -71,3 +72,16 @@ of interrupted evidence. The guide describes exact-ID resumption and operator re
 #550 remains incomplete. Keep genuine different-host binding/lifecycle acceptance,
 real ChatGPT/Claude execution, native editor recovery and production service-user/
 multi-user qualification unchecked. PR #562 stays Draft with no auto-merge.
+
+## Controller-backed catalog collisions
+
+Controller-backed historical tasks now receive destination ordinals after the
+existing catalog and task row IDs. Relative task order, task IDs and attempt IDs
+remain unchanged. The mapping is journaled before file installation and reused
+after interruption. The copied task index and controller rows use the same mapping.
+Old in-progress journals keep their original ordinal plan.
+
+Project-DB-backed histories still reject ordinal collisions. Their protected source
+checkpoint contains the original private task index; accepting a different mapping
+without translating later restores could corrupt task ordering. UUID collisions also
+remain rejected. This increment has not been tested or run on a destination host.

@@ -53,7 +53,8 @@ python3 scripts/project-backup-transfer.py plan-import /private/transfer/checkpo
 ```
 
 This reports identity collisions, source task reservations, private view/draft
-counts and retained session counts. It does not display private record contents.
+counts and retained session counts. Ordinal collisions in this preliminary report can
+be resolved by the importer for controller-backed task history. It does not display private record contents.
 A conflict-free report is not an import admission. The `import` command performs
 additional checks and a durable registration transaction.
 
@@ -79,10 +80,12 @@ additional checks and a durable registration transaction.
    resources during import. Existing destination workloads are outside this procedure.
 
 The destination project, DB, volume UUID and resource directories must be unused.
-The requested volume name must also be unused. Task UUIDs, attempt UUIDs and catalog
-ordinals must not collide with existing destination history. An empty destination
-Sandbox catalog is the simplest supported choice. Identity remapping, in-place
-replacement and merging two histories are outside this workflow.
+The requested volume name must also be unused. Task UUIDs and attempt UUIDs must not collide with existing destination history.
+For controller-backed task history, the importer assigns new ordered catalog ordinals
+above existing destination entries. It journals the mapping before copying files and
+reuses it on retry. Project-DB-backed task history still requires noncolliding
+ordinals because its original checkpoint must remain restorable. Task identity
+remapping, in-place replacement and merging two histories are outside this workflow.
 
 Allow space for both the live pair and a retained source archive. Capacity checks
 sum logical file lengths per filesystem, including two volume copies when they

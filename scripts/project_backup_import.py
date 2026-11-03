@@ -197,6 +197,30 @@ def validate_destination(db, args, project, database, volume, catalog):
     return path.resolve(strict=True)
 
 
+def remap_catalog(db, catalog, route):
+    """Reserve ordered controller-backed history after all existing destination ordinals."""
+    if route or not catalog:
+        return catalog
+    maximum = db.execute("SELECT COALESCE(MAX(ordinal),0) FROM sandbox_task_catalog").fetchone()[0]
+    maximum = max(maximum, db.execute("SELECT COALESCE(MAX(rowid),0) FROM ai_sandbox_tasks").fetchone()[0])
+    sequence = db.execute("SELECT seq FROM sqlite_sequence WHERE name='sandbox_task_catalog'").fetchone()
+    maximum = max(maximum, sequence[0] if sequence else 0)
+    if maximum + len(catalog) > (1 << 63) - 1:
+        raise ValueError("Destination task catalog ordinal space is exhausted")
+    return [(maximum + index, key, project, attempt, ready)
+            for index, (_, key, project, attempt, ready) in enumerate(catalog, 1)]
+
+
+def planned_catalog(catalog, mapping):
+    """The journal owns the mapping, including reservations without a task row."""
+    if set(mapping) != {row[1] for row in catalog}:
+        raise ValueError("Retained task ordinal mapping differs from source history")
+    values = [mapping[row[1]] for row in catalog]
+    if any(type(value) is not int or value <= 0 or value >= (1 << 63) for value in values) or values != sorted(set(values)):
+        raise ValueError("Retained task ordinal mapping is invalid")
+    return [(mapping[key], key, project, attempt, ready)
+            for _, key, project, attempt, ready in catalog]
+
 def new_stage(source, folder, record, role, io):
     path = folder / (".import-" + record["id"] + "-" + role + "-" + str(uuid.uuid4()))
     io.copy_file(source, path)
@@ -355,6 +379,8 @@ def register(db, args, record, config, route, catalog, actual, io):
                             ordinal = ordinals[key]
                             db.execute("INSERT INTO ai_sandbox_tasks(rowid," + columns + ") VALUES(" + ",".join("?" for _ in range(len(row) + 1)) + ")", (ordinal,) + row)
                         else:
+                            if table == "ai_sandbox_task_index":
+                                row = row[:2] + (ordinals[row[0]],) + row[3:]
                             db.execute("INSERT INTO " + table + "(" + columns + ") VALUES(" + ",".join("?" for _ in row) + ")", row)
                 clear_task_paths(db, project)
             finally:
@@ -417,6 +443,12 @@ def run_import(args, io):
             manifest, config, route, catalog, actual = inspect_source(source, io)
             if manifest != m:
                 raise ValueError("Source manifest changed during import admission")
+            if previous:
+                # Older pending journals used source ordinals; retain their original plan.
+                mapping = record.get("taskOrdinals", {row[1]: row[0] for row in catalog})
+                catalog = planned_catalog(catalog, mapping)
+            else:
+                catalog = remap_catalog(db, catalog, route)
             pool = validate_destination(db, args, c["projectId"], c["databaseId"], c["volumeId"], catalog)
             pool_stat = os.stat(pool)
             if m["volumeBytes"] % (1 << 30) or not 1 <= m["volumeBytes"] >> 30 <= 65535 or c["generation"] >= (1 << 63) - 1:
@@ -442,7 +474,7 @@ def run_import(args, io):
                 for key in ("project", "volume", "backup", "projectStage", "volumeStage", "archiveStage"):
                     if os.path.lexists(folders[key]):
                         raise ValueError("Destination directory already exists; import never overwrites it")
-                record = dict(id=args.operation, project=c["projectId"], checkpoint=c["id"], phase="staging", request=request, manifest=manifest, folders=folders, poolIdentity=[pool_stat.st_dev, pool_stat.st_ino], generation=c["generation"] + 1)
+                record = dict(id=args.operation, project=c["projectId"], checkpoint=c["id"], phase="staging", request=request, manifest=manifest, folders=folders, poolIdentity=[pool_stat.st_dev, pool_stat.st_ino], generation=c["generation"] + 1, taskOrdinals={row[1]: row[0] for row in catalog})
                 transaction(db, lambda: db.execute("INSERT INTO project_workspace_imports VALUES(?,?,'staging',?)", (args.operation, c["projectId"], encode(record))))
             for path in (parent, projects, backups):
                 ensure_directory(path, io)
