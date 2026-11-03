@@ -143,8 +143,6 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         return Err(Error::NotReady);
     }
     let layout = lifecycle::Layout::from_process_env()?;
-    let _installation = crate::native_host::installation_guard(&layout.managed_home)
-        .map_err(super::resource::Error::from)?;
     #[cfg(target_os = "windows")]
     let _host_work = super::controller::HostWork::begin(&layout.managed_home)?;
     let manifest = manifest::Manifest::for_install(&layout.managed_home)?;
@@ -152,6 +150,8 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
     lifecycle::prepare(&layout)?;
     // Before the service stops, so declining the download leaves it running.
     let artifacts = provision::download_all(&host, &layout.downloads(), assume_yes)?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     if reinstall {
         daemon::uninstall(&layout)?;
         managed_home::clear_installation_state(&layout.managed_home)?;

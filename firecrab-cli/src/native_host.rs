@@ -45,10 +45,15 @@ pub(crate) struct InstallationGuard {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
-pub(crate) fn installation_guard(home: &Path) -> io::Result<InstallationGuard> {
-    Ok(InstallationGuard {
+pub(crate) fn installation_guard(home: &Path) -> io::Result<Option<InstallationGuard>> {
+    match fs::symlink_metadata(home) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+        Ok(_) => (),
+    }
+    Ok(Some(InstallationGuard {
         _lock: metadata::installation_lock(home)?,
-    })
+    }))
 }
 
 /// Identity acquisition cannot create or reconfigure an installation.
@@ -235,6 +240,14 @@ fn machine_identity() -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_native_installation_preflight_does_not_create_a_profile() {
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("not-installed");
+        assert!(installation_guard(&home).unwrap().is_none());
+        assert!(!home.exists());
+    }
 
     #[test]
     fn replacing_a_native_directory_cannot_reuse_its_original_installation_identity() {

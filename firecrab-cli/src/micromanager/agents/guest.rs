@@ -126,11 +126,18 @@ impl Guest {
         } else {
             "/usr/bin/ssh"
         });
-        #[cfg(test)]
-        let program = self.program.clone().unwrap_or(default);
         #[cfg(not(test))]
-        let program = default;
-        let mut command = Command::new(program);
+        let mut command = Command::new(default);
+        #[cfg(test)]
+        let mut command = if let Some(script) = &self.program {
+            // Run the fixture through its interpreter. Concurrent forks can briefly
+            // retain a newly written executable's descriptor and cause ETXTBSY.
+            let mut command = Command::new("python3");
+            command.arg(script);
+            command
+        } else {
+            Command::new(default)
+        };
         command
             .args([
                 "-F",

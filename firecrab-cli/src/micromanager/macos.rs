@@ -265,8 +265,6 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         std::env::var_os("PATH"),
     )?;
     let layout = lifecycle::Layout::from_process_env()?;
-    let _installation = crate::native_host::installation_guard(&layout.managed_home)
-        .map_err(super::resource::Error::from)?;
     let binaries_in_place = same_file(&cli_source, &layout.cli_path())
         && same_file(&helper_source, &layout.helper_path());
     let install_binaries = reinstall || !binaries_in_place;
@@ -276,6 +274,8 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
     // Before anything changes, so declining the download leaves the host as it was.
     let manifest = installation_manifest(&layout.managed_home)?;
     let artifacts = provision::download_all(&layout.managed_home, &manifest, assume_yes)?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     if reinstall {
         daemon::uninstall(&layout)?;
         managed_home::clear_installation_state(&layout.managed_home)?;
