@@ -87,10 +87,10 @@ pub(super) fn cli_args(agent: &Agent, resume: Option<&Saved>) -> Vec<String> {
         }
         None => {}
     }
-    if let Some(mode) = resume.and_then(|saved| saved.permission_mode.as_deref()) {
-        if agent.kind == "claude" {
-            args.extend(["--permission-mode".to_owned(), mode.to_owned()]);
-        }
+    if let Some(mode) = resume.and_then(|saved| saved.permission_mode.as_deref())
+        && agent.kind == "claude"
+    {
+        args.extend(["--permission-mode".to_owned(), mode.to_owned()]);
     }
     let (model, effort) = match &agent.chosen {
         Some(chosen) => (chosen.model.as_str(), chosen.effort.as_str()),

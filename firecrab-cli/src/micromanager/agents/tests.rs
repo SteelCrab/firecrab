@@ -1,4 +1,3 @@
-#[cfg(unix)]
 use super::*;
 #[cfg(unix)]
 fn fixture() -> (tempfile::TempDir, Runtime) {
@@ -389,11 +388,13 @@ fn a_task_records_the_model_and_effort_it_starts_with() {
     let start = |cli, model, effort| {
         let value = runtime.start_task(task(cli, model, effort)).unwrap();
         let calls = fs::read_to_string(root.path().join("remote-calls.jsonl")).unwrap();
-        let launch = calls
-            .lines()
-            .rfind(|l| l.contains("'agent' 'start'"))
-            .unwrap()
-            .to_owned();
+        let launch: String = serde_json::from_str(
+            calls
+                .lines()
+                .rfind(|l| l.contains("'agent' 'start'"))
+                .unwrap(),
+        )
+        .unwrap();
         (
             value["model"].as_str().unwrap().to_owned(),
             value["effort"].as_str().unwrap().to_owned(),
@@ -416,7 +417,20 @@ fn a_task_records_the_model_and_effort_it_starts_with() {
     );
     let (model, effort, launch) = start("claude", "", "max");
     assert_eq!((model.as_str(), effort.as_str()), ("opus", "max"));
-    assert!(launch.contains("'--' '--effort' 'max'"), "{launch}");
+    let conversation = launch
+        .split_once("'--session-id' '")
+        .unwrap()
+        .1
+        .split('\'')
+        .next()
+        .unwrap();
+    assert!(Uuid::parse_str(conversation).is_ok(), "{launch}");
+    assert!(
+        launch.contains(&format!(
+            "'--' '--session-id' '{conversation}' '--effort' 'max'"
+        )),
+        "{launch}"
+    );
     assert!(!launch.contains("--model"), "{launch}");
     // Without settings the value stays unknown instead of being guessed.
     shell_replies(root.path(), json!({}));

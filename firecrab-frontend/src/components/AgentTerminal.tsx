@@ -144,6 +144,10 @@ export default function AgentTerminal({
     };
     const observer = new ResizeObserver(resize);
     observer.observe(element);
+    // A fit can remeasure a newly loaded font after choosing rows and columns.
+    // Fit again when the rendered grid changes to keep it inside its container.
+    const screen = element.querySelector(".xterm-screen");
+    if (screen) observer.observe(screen);
     resize();
 
     const coordinates = (event: MouseEvent) => {

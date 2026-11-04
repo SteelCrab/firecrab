@@ -274,16 +274,15 @@ mod tests {
     fn unsaved_settings_keep_the_micromanager_memory_default_of_this_mac() {
         let dir = tempfile::tempdir().unwrap();
         let output = std::process::Command::new("/usr/sbin/sysctl")
-            .args(["-n", "hw.memsize"])
+            .args(["-n", "hw.activecpu", "hw.memsize"])
             .output()
             .unwrap();
-        let bytes: u64 = String::from_utf8(output.stdout)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        let capacity = String::from_utf8(output.stdout).unwrap();
+        let mut lines = capacity.lines();
+        let cpu: u32 = lines.next().unwrap().parse().unwrap();
+        let bytes: u64 = lines.next().unwrap().parse().unwrap();
         let host = firecrab_api_types::ManagerHostCapacity {
-            cpu: 8,
+            cpu,
             memory_mib: bytes >> 20,
             disk_available_gib: 100,
             network_interfaces: vec![],
@@ -296,7 +295,8 @@ mod tests {
             u64::from(unsaved.settings.memory_mib),
             new_install.memory_mib
         );
-        assert_eq!(unsaved.settings.cpu, 2);
+        assert_eq!(u32::from(unsaved.settings.cpu), new_install.cpu);
+        assert_eq!(new_install.cpu, cpu.min(8));
         let chosen = Settings {
             memory_mib: 6144,
             ..unsaved.settings.clone()
