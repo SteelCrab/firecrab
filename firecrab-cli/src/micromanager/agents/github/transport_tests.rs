@@ -56,12 +56,17 @@ fn vm_status_keeps_authentication_and_sessions_in_the_selected_vm_scope() {
     assert_eq!(status["github"]["state"], "connected");
     assert_eq!(status["agents"][0]["id"], agent.id.to_string());
     assert_eq!(status["agents"][0]["state"], "idle");
-    assert!(
+    assert_eq!(
         status["drivers"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|d| ["codex", "claude"].contains(&d["id"].as_str().unwrap()))
+            .map(|driver| (
+                driver["id"].as_str().unwrap(),
+                driver["available"].as_bool().unwrap(),
+            ))
+            .collect::<Vec<_>>(),
+        [("codex", true), ("claude", false), ("grok", false)]
     );
     runtime
         .guest

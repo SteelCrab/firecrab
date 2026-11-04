@@ -154,6 +154,7 @@ pub fn host_capacity(home: &Path) -> Result<ManagerHostCapacity, Error> {
 }
 
 /// Sparse data disk a new macOS install creates; an existing image keeps its size.
+#[cfg(not(target_os = "windows"))]
 pub const DEFAULT_DATA_DISK_GIB: u64 = 64;
 
 /// RAM for an allocation that was never saved: 16 GiB while the host keeps

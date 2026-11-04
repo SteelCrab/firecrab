@@ -95,7 +95,7 @@ fn install_runs_the_pinned_cli_for_every_supported_agent() {
         .unwrap();
     assert!(
         script.contains(&format!(
-            "npx -y {CLI} 'add' 'anthropics/skills' '--skill' 'webapp-testing' '-g' '-a' 'claude-code' 'codex' 'gemini-cli' 'opencode' 'github-copilot' 'cursor' '-y' '--json'"
+            "npx -y {CLI} 'add' 'anthropics/skills' '--skill' 'webapp-testing' '-g' '-a' 'claude-code' 'codex' 'gemini-cli' 'opencode' 'github-copilot' 'cursor' 'grok' '-y' '--json'"
         )),
         "{script}"
     );

@@ -697,7 +697,7 @@ test("work calls an agent only when a task is submitted", async (t) => {
   assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
   await expect(
     page.getByRole("button", { name: "New task", exact: true }),
-  ).toHaveCount(0);
+  ).toBeEnabled();
   const dialog = page.locator(".am-inline-task");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(dialog.getByLabel("Name", { exact: true })).toHaveCount(0);
@@ -868,8 +868,8 @@ test("split terminals settle instead of resizing continuously", async (t) => {
   assert.equal(resizes(state), sent, "split terminals kept sending new sizes");
 });
 
-test("dragging terminal output selects it and Cmd+C copies it", async (t) => {
-  const { page } = await setup(t, { authenticated: false });
+test("dragging terminal output selects it and the system copy shortcut copies it", async (t) => {
+  const { page, state } = await setup(t, { authenticated: false });
   await page.setViewportSize({ width: 1440, height: 900 });
   const session = await openTerminals(page);
   await expect(session.first().getByRole("log")).toContainText(
@@ -891,10 +891,21 @@ test("dragging terminal output selects it and Cmd+C copies it", async (t) => {
   await expect(
     session.first().locator(".xterm-selection div").first(),
   ).toBeAttached();
-  await page.keyboard.press("Meta+c");
+  const shortcut = await page.evaluate(() =>
+    /Mac/.test(navigator.platform) ? "Meta+c" : "Control+Insert",
+  );
+  const inputs = state.keys.filter(
+    (key) => key.type === "terminal.input",
+  ).length;
+  await page.keyboard.press(shortcut);
   await expect
     .poll(() => page.evaluate(() => window.__copied))
     .toContain("codex");
+  assert.equal(
+    state.keys.filter((key) => key.type === "terminal.input").length,
+    inputs,
+    "Copy must not send an interrupt to the CLI",
+  );
 });
 
 test("agent terminals forward raw keys, Unicode, paste, resize and scroll to their own PTY", async (t) => {
@@ -2723,7 +2734,7 @@ test("New task turns model and effort off for a CLI that has neither", async (t)
     await expect(select).toBeDisabled();
     await expect(select).toHaveValue("");
     await expect(select).toHaveAccessibleDescription(
-      "Model and effort choices work only with Codex and Claude Code.",
+      "Model choices work with Codex, Claude Code and Grok Build. Effort choices work only with Codex and Claude Code.",
     );
   }
   await start("Summarize open issues");
@@ -3694,3 +3705,46 @@ for (const [width, height] of [
     assert.ok(gaps.right >= gaps.left - 1, message);
     assert.ok(gaps.bottom >= gaps.top - 1, message);
   });
+
+test("terminal refits when a loaded font changes its cell dimensions", async (t) => {
+  const { page, state } = await setup(t);
+  const session = await openTerminals(page);
+  await page.waitForTimeout(600);
+  await page.evaluate(async () => {
+    for (const font of [...document.fonts])
+      if (font.family === "JetBrains Mono") document.fonts.delete(font);
+    const font = new FontFace(
+      "JetBrains Mono",
+      'local("Arial"), local("Liberation Sans"), local("DejaVu Sans")',
+      { sizeAdjust: "140%", ascentOverride: "150%", descentOverride: "20%" },
+    );
+    await font.load();
+    document.fonts.add(font);
+  });
+  // The next fit can measure the new font after it has chosen rows and columns.
+  const before = resizes(state);
+  await page.setViewportSize({ width: 1441, height: 900 });
+  await expect.poll(() => resizes(state)).toBeGreaterThan(before);
+  await expect
+    .poll(() =>
+      session
+        .first()
+        .locator(".am-terminal")
+        .evaluate((box) => {
+          const outer = box.getBoundingClientRect();
+          const text = box
+            .querySelector(".xterm-screen")
+            .getBoundingClientRect();
+          return (
+            text.left - outer.left >= 12 &&
+            text.top - outer.top >= 12 &&
+            outer.right - text.right >= text.left - outer.left - 1 &&
+            outer.bottom - text.bottom >= text.top - outer.top - 1
+          );
+        }),
+    )
+    .toBe(true);
+  const sent = resizes(state);
+  await page.waitForTimeout(600);
+  assert.equal(resizes(state), sent, "font changes kept resizing the terminal");
+});

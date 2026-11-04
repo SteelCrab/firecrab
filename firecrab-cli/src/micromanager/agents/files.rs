@@ -136,6 +136,7 @@ impl Runtime {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::super::tests::{guest_fixture, shell_replies};
     use super::*;
 

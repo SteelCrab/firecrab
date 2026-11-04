@@ -115,13 +115,20 @@ func unsavedAllocationsGetSixteenGiBWhileTheHostKeepsEightGiB() {
         (64, 16384), (24, 16384), (16, 8192), (8, 4096), (4, 4096)
     ]
     for (hostGiB, memoryMiB) in cases {
-        let options = VMOptions.managedDefaults(environment: [:], physicalMemory: hostGiB << 30)
+        let options = VMOptions.managedDefaults(
+            environment: [:], physicalMemory: hostGiB << 30, activeProcessorCount: 8)
         #expect(options.memorySizeMiB == memoryMiB, "\(hostGiB) GiB host")
-        #expect(options.cpuCount == 2)
+        #expect(options.cpuCount == 8)
     }
     let configured = VMOptions.managedDefaults(
         environment: ["FIRECRAB_MICROMANAGER_MEMORY_MIB": "8192"], physicalMemory: 24 << 30)
     #expect(configured.memorySizeMiB == 8192)
+}
+
+@Test(arguments: [(0, 1), (1, 1), (2, 2), (5, 5), (8, 8), (16, 8)])
+func unsavedCPUAllocationUsesEightCPUsWithinTheHostLimit(hostCPUs: Int, expectedCPUs: Int) {
+    let options = VMOptions.managedDefaults(environment: [:], activeProcessorCount: hostCPUs)
+    #expect(options.cpuCount == expectedCPUs)
 }
 
 @Test
