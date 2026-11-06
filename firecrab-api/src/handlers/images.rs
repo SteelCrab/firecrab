@@ -669,14 +669,14 @@ pub async fn delete_staged_package(
     Path(alias): Path<String>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<StatusCode, AppError> {
-    // Same reason `delete_image` excludes it: `__microboot` is internal
-    // (see crate::microboot). It never has anything under `.packages/`
-    // anyway (this would just fall through to `not_staged`), but excluding
-    // it explicitly keeps this handler's alias guard symmetric with
-    // `delete_image`'s.
+    // `__microboot` is internal. A custom alias may no longer be installed
+    // while its local catalog registration and staged package still exist.
     if alias == crate::microboot::MICROBOOT_ALIAS
         || (TemplateRegistry::known_spec(&alias).is_none()
-            && state.templates.resolve_alias(&alias).is_none())
+            && state.templates.resolve_alias(&alias).is_none()
+            && local_catalog_entry(&state, &alias, request_id.0)
+                .await?
+                .is_none())
     {
         return Err(AppError::not_found(request_id.0));
     }
