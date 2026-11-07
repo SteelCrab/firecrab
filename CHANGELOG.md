@@ -8,6 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.4.4](#044---2026-11-07) | 2026-11-07 | AI Sandbox setup and Firecrab addresses for MicroServices |
 | [0.4.3](#043---2026-11-02) | 2026-11-02 | AI Sandbox, CODE workspaces, registry kernels and inactive VM network changes |
 | [0.4.2](#042---2026-11-01) | 2026-11-01 | React dashboard and MicroVM agent workspaces |
 | [0.4.1](#041---2026-10-30) | 2026-10-30 | Latest managed installations and cross-platform updates |
@@ -24,6 +25,21 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 ## [Unreleased]
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
+
+## [0.4.4] - 2026-11-07
+
+### Fixed
+
+- AI Sandbox prepares Ubuntu workspaces from a pinned OCI image and a stable
+  kernel. Setup shows image preparation logs and waits for SSH before it
+  installs coding tools. See [#576](https://github.com/SteelCrab/firecrab/issues/576).
+- AI Sandbox can retry coding tool installation after a VM restart. It clears
+  abandoned installation locks and shows the failed step when setup stops.
+- AI Sandbox shows **New task** before the first task exists.
+- Firecrab Tunnel can publish a MicroService without a domain when you select
+  its `<name>.internal` route. The Firecrab address follows the service across
+  redeployments. Remove that Firecrab address before downgrading the helper
+  to an earlier version.
 
 ## [0.4.3] - 2026-11-02
 
