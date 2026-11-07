@@ -511,11 +511,15 @@ test("work calls an agent only when a task is submitted", async (t) => {
     page.getByRole("button", { name: "New agent", exact: true }),
   ).toHaveCount(0);
   assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
-  await expect(
-    page.getByRole("button", { name: "New task", exact: true }),
-  ).toHaveCount(0);
+  const newTask = page.getByRole("button", { name: "New task", exact: true });
+  await expect(newTask).toBeEnabled();
+  await newTask.click();
+  const taskDialog = page.getByRole("dialog", { name: "New task", exact: true });
+  await expect(taskDialog).toBeVisible();
+  assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
+  await page.keyboard.press("Escape");
+  await expect(taskDialog).toHaveCount(0);
   const dialog = page.locator(".am-inline-task");
-  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(dialog.getByLabel("Name", { exact: true })).toHaveCount(0);
   await expect(
     dialog.getByRole("button", { name: "Start task", exact: true }),
