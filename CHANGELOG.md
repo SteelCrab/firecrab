@@ -28,11 +28,22 @@ Entries land here as work merges, and move under the next version heading when t
 
 ## [0.4.4] - 2026-11-07
 
+### Added
+
+- None.
+
+### Changed
+
+- Align Rust, dashboard and E2E package versions and lockfiles on 0.4.4.
+
+### Deprecated
+
+- None.
+
 ### Fixed
 
 - AI Sandbox prepares Ubuntu workspaces from a pinned OCI image and a stable
-  kernel. Setup shows image preparation logs and waits for SSH before it
-  installs coding tools. See [#576](https://github.com/SteelCrab/firecrab/issues/576).
+  kernel. Setup waits for SSH before it installs coding tools. See [#576](https://github.com/SteelCrab/firecrab/issues/576).
 - AI Sandbox can retry coding tool installation after a VM restart. It clears
   abandoned installation locks and shows the failed step when setup stops.
 - AI Sandbox shows **New task** before the first task exists.
@@ -40,6 +51,10 @@ Entries land here as work merges, and move under the next version heading when t
   its `<name>.internal` route. The Firecrab address follows the service across
   redeployments. Remove that Firecrab address before downgrading the helper
   to an earlier version.
+
+### Improved
+
+- Show image preparation logs during AI Sandbox setup.
 
 ## [0.4.3] - 2026-11-02
 
