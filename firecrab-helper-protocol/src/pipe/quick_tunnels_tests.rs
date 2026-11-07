@@ -168,6 +168,60 @@ fn route_targets_require_an_existing_non_reserved_literal_hostname() {
 }
 
 #[test]
+fn service_target_follows_the_same_service_without_copying_private_ingress_policy() {
+    let service_id = Uuid::from_u128(10);
+    let deployment_id = Uuid::from_u128(11);
+    let network_id = Uuid::from_u128(12);
+    let connector_id = Uuid::from_u128(2);
+    let mut config: Config = serde_json::from_value(json!({
+        "routes": [{
+            "host": "app.internal",
+            "owner": { "serviceId": service_id, "deploymentId": deployment_id },
+            "network": { "micro_network_id": network_id, "gateway": "172.30.1.1", "prefix": 24 },
+            "securityGroup": { "id": Uuid::from_u128(13), "micro_network_id": network_id, "rules": [] },
+            "upstreams": ["172.30.1.2:8080"],
+        }],
+    }))
+    .unwrap();
+    config.quick_tunnels.push(QuickTunnelEntry {
+        id: connector_id,
+        name: "App".into(),
+        target: QuickTunnelTarget::Service { service_id },
+    });
+    let host = quick_tunnel_host(connector_id);
+    config.validate().unwrap();
+    let nginx = config.nginx();
+    let server = nginx
+        .split_once(&format!("listen {}; server_name {host};", config.listen))
+        .unwrap()
+        .1
+        .split_once("\n  }")
+        .unwrap()
+        .0;
+    assert!(server.contains("proxy_pass http://fc_route_1;"));
+    assert!(!server.contains("deny all;"));
+    assert!(!server.contains("/__firecrab/deploy"));
+    assert!(nginx.contains("listen 172.30.1.1:80; server_name app.internal;"));
+    assert!(nginx.contains("deny all;"));
+
+    let mut route = config.routes.pop().unwrap();
+    config.validate().unwrap();
+    assert!(!config.nginx().contains(&host));
+
+    route.owner.as_mut().unwrap().deployment_id = Uuid::from_u128(14);
+    route.upstreams = vec!["172.30.1.3:8080".parse().unwrap()];
+    config.routes.push(route);
+    config.validate().unwrap();
+    let nginx = config.nginx();
+    assert!(nginx.contains(&host));
+    assert_eq!(nginx.matches("server 172.30.1.3:8080 ").count(), 2);
+
+    config.routes[0].owner.as_mut().unwrap().service_id = Uuid::from_u128(15);
+    config.validate().unwrap();
+    assert!(!config.nginx().contains(&host));
+}
+
+#[test]
 fn linked_host_can_lose_one_path_but_not_its_last_saved_route() {
     let mut config = config();
     config.quick_tunnels = vec![QuickTunnelEntry {
