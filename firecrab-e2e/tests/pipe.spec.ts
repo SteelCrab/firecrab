@@ -677,7 +677,7 @@ async function quickAction(page: Page, name: string, action: string) {
 }
 
 test.describe("Pipe cards @dashboard", () => {
-  test("excludes private service routes from public connector targets", async ({
+  test("publishes a private service route only through an explicit Firecrab address", async ({
     page,
   }) => {
     const savedRoutes: PipeConfig["routes"] = [
@@ -694,16 +694,34 @@ test.describe("Pipe cards @dashboard", () => {
         },
       },
     ];
-    await open(page, { savedRoutes, card: "firecrab-tunnel" });
+    const m = await open(page, { savedRoutes, card: "firecrab-tunnel" });
     await openConnector(page);
     await namedTarget(page);
     await expect(
-      routeHost(page).locator('option[value="orders.internal"]'),
-    ).toHaveCount(0);
-    await expect(
       routeHost(page).locator('option[value="app.example.com"]'),
     ).toHaveCount(1);
-    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(
+      routeHost(page).locator('option[value="orders.internal"]'),
+    ).toHaveText("orders.internal · MicroService internal address");
+    await routeHost(page).selectOption("orders.internal");
+    await expect(
+      page.getByText("Publishes this MicroService to the internet.", {
+        exact: false,
+      }),
+    ).toBeVisible();
+    expect(m.firecrabSaves).toEqual([]);
+    await page
+      .getByLabel("Connection token", { exact: true })
+      .fill(CONNECTION_TOKEN);
+    await save(page);
+    await expect(page.locator("#firecrab-address-editor")).toHaveCount(0);
+    expect(m.firecrabSaves).toEqual([
+      {
+        token: CONNECTION_TOKEN,
+        target: { type: "nginx", host: "orders.internal" },
+      },
+    ]);
+
     await page.goto("/#/pipe/quick-tunnel");
     await openConnector(page);
     await namedTarget(page);
