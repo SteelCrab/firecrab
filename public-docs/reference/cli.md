@@ -90,12 +90,12 @@ These commands use normal host selection; see [Stack ownership and planning](../
 
 | Resource | Commands |
 | --- | --- |
-| VM | `vm list`, `create`, `start ID`, `stop ID`, `delete ID` |
+| VM | `vm list`, `create`, `run`, `start VM`, `pause VM`, `resume VM`, `stop VM`, `delete VM`, `logs VM`; `VM` is a UUID or a name |
 | MicroService | `microservice list`, `get ID`, `create --file JSON`, `update ID --file JSON`, `delete ID`, `deploy ID [--host-port PORT]`, `status ID`, `stop ID`; `--host-port` may be omitted only for services with a domain; see [MicroService](../guides/microservices.md) |
 | Deploy | `microservice rollout ID --file JSON`, `releases ID`, `rollback ID --release UUID`, `retry ID`; rollout and rollback accept `--strategy rolling\|blue_green`, `--operation-id UUID`, `--expected-release UUID`, `--no-wait`, and `--timeout SECONDS`; see [Deploy](../guides/deploy.md) |
-| Console | `vm console ID` (`terminal` alias) |
+| Console | `vm console VM` (`terminal` alias) |
 | Network | `network list`, `create`, `delete ID` |
-| Image | `image list`, `inspect REFERENCE`, `import REFERENCE`, `import-status ALIAS` |
+| Image | `image list`, `inspect REFERENCE`, `import REFERENCE`, `import-status ALIAS`, `delete ALIAS` |
 | Host profile | `host add`, `list`, `use`, `show`, `remove` |
 | Pipe AI | `ai login`, `login-status`, `connect`, `list`, `verify`, `get-default`, `set-default`, `respond`, `disconnect`; see [Pipe AI](../guides/pipe-ai.md) |
 | Local MCP | `mcp`; serves typed tools over stdio through the selected REST host |
@@ -113,24 +113,24 @@ Install or import an image, then create its network and VM:
 ```sh
 firecrab image list
 firecrab network create --name app --subnet-cidr 172.31.20.0/24
-firecrab vm create --name app-1 --template alpine-3.24.1 --network NETWORK_ID
-firecrab vm start VM_ID
-firecrab vm pause VM_ID --json
-firecrab vm resume VM_ID --json
+firecrab vm create --name app-1 --template alpine-3.24.1 --network app
+firecrab vm start app-1
+firecrab vm pause app-1 --json
+firecrab vm resume app-1 --json
 ```
 
-Replace IDs with values returned by the previous commands.
-Defaults are one vCPU, 512 MiB RAM, and 2 GiB disk.
-Override with `--cpu`, `--ram`, and `--disk-gb`.
+VM commands take a VM UUID or name; `--network` takes a MicroNetwork UUID or name.
+Defaults are one vCPU, 512 MiB RAM, and 2 GiB disk; override with `--cpu`, `--ram`, and `--disk-gb`.
 Use `--egress internet|isolated` and `--storage-root ID` for policy and disk placement.
 Use repeated `--volume NAME_OR_UUID:/guest/path` options for independent data disks.
 Manage them with `firecrab volume list|create|inspect|attach|detach|delete`.
 See [Persistent volumes](../guides/volumes.md) for the full workflow.
+See [Run and inspect](../guides/oci.md#run-and-inspect) for `vm run`, `--publish`, `--env`, `vm logs`, and `image delete`.
 
 ### Console
 
 ```sh
-firecrab vm console VM_ID
+firecrab vm console app-1
 ```
 
 The stream includes up to 256 KiB of backlog, then live serial output.

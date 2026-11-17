@@ -52,6 +52,16 @@ pub fn prepare(runtime: &Path, settings: &Ssh) -> Result<(), manifest::Error> {
     })
 }
 
+/// The directory that holds this home's control sockets, when connections are reused.
+///
+/// Entries under `/private/tmp` do not survive a reboot or temporary-file
+/// cleanup, so a long-lived caller must be able to create this directory again.
+pub fn control_directory(runtime: &Path, settings: &Ssh) -> Option<PathBuf> {
+    settings
+        .reuse_connections
+        .then(|| socket_directory(runtime))
+}
+
 fn socket_directory(runtime: &Path) -> PathBuf {
     // Unix-domain sockets have a short path limit. Managed homes can be much
     // longer, so use a private, deterministic directory outside the VM share.

@@ -1,13 +1,61 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::time::{Duration, Instant};
 
 use clap::ValueEnum;
-use firecrab_api_types::{CreateVmRequest, EgressPolicy, VmResponse, VmState};
+use firecrab_api_types::{
+    CreateVmRequest, EgressPolicy, MicroNetworkResponse, PortForward, PortProtocol, VmLogResponse,
+    VmResponse, VmState,
+};
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::api_client::{ApiClient, ApiError};
 use crate::vm_console;
+
+/// How often `vm run` rereads a VM that is still starting.
+const START_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Options shared by `vm create` and `vm run`.
+#[derive(Debug, clap::Args)]
+pub struct CreateArgs {
+    /// User-facing MicroVM name.
+    #[arg(long)]
+    pub name: String,
+    /// Installed image alias, such as `alpine-3.24.1`.
+    #[arg(long)]
+    pub template: String,
+    /// Number of virtual CPUs.
+    #[arg(long, default_value_t = 1)]
+    pub cpu: u8,
+    /// Memory in MiB.
+    #[arg(long, default_value_t = 512)]
+    pub ram: u32,
+    /// Disk capacity in GiB.
+    #[arg(long, default_value_t = 2)]
+    pub disk_gb: u16,
+    /// MicroNetwork UUID or name for the VM's ENI-like attachment.
+    #[arg(long)]
+    pub network: String,
+    /// Outbound network posture.
+    #[arg(long, value_enum, default_value = "internet")]
+    pub egress: EgressArg,
+    /// Storage root id; omitted uses the API's default root.
+    #[arg(long)]
+    pub storage_root: Option<String>,
+    /// Existing data volume, repeated as NAME_OR_UUID:/guest/path.
+    #[arg(long, value_name = "VOLUME:/PATH")]
+    pub volume: Vec<String>,
+    /// Host port forwarded to a guest port, repeated as HOST:GUEST[/tcp|udp].
+    #[arg(short = 'p', long, value_name = "HOST:GUEST[/PROTO]", value_parser = parse_publish)]
+    pub publish: Vec<PortForward>,
+    /// Environment variable for the image's app, repeated as NAME=VALUE.
+    #[arg(short = 'e', long, value_name = "NAME=VALUE", value_parser = parse_env)]
+    pub env: Vec<(String, String)>,
+    /// Emit the resulting VM as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
 
 /// MicroVM operations backed by firecrab-api.
 #[derive(Debug, clap::Subcommand)]
@@ -19,75 +67,72 @@ pub enum Command {
         json: bool,
     },
     /// Create a MicroVM from an installed image.
-    Create {
-        /// User-facing MicroVM name.
+    Create(CreateArgs),
+    /// Create a MicroVM and start it in one step.
+    Run {
+        #[command(flatten)]
+        create: CreateArgs,
+        /// Return after the start request instead of waiting for `running`.
         #[arg(long)]
-        name: String,
-        /// Installed image alias, such as `alpine-3.24.1`.
-        #[arg(long)]
-        template: String,
-        /// Number of virtual CPUs.
-        #[arg(long, default_value_t = 1)]
-        cpu: u8,
-        /// Memory in MiB.
-        #[arg(long, default_value_t = 512)]
-        ram: u32,
-        /// Disk capacity in GiB.
-        #[arg(long, default_value_t = 2)]
-        disk_gb: u16,
-        /// MicroNetwork UUID for the VM's ENI-like attachment.
-        #[arg(long)]
-        network: Uuid,
-        /// Outbound network posture.
-        #[arg(long, value_enum, default_value = "internet")]
-        egress: EgressArg,
-        /// Storage root id; omitted uses the API's default root.
-        #[arg(long)]
-        storage_root: Option<String>,
-        /// Existing data volume, repeated as NAME_OR_UUID:/guest/path.
-        #[arg(long, value_name = "VOLUME:/PATH")]
-        volume: Vec<String>,
-        /// Emit the created VM as JSON.
-        #[arg(long)]
-        json: bool,
+        no_wait: bool,
+        /// Seconds to wait for `running`; reaching it does not stop the VM.
+        #[arg(long, default_value_t = 120)]
+        timeout: u64,
     },
     /// Start an inactive MicroVM.
     Start {
-        /// MicroVM UUID.
-        id: Uuid,
+        /// MicroVM UUID or name.
+        #[arg(value_name = "VM")]
+        target: String,
         /// Emit the resulting VM as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Pause guest execution while keeping its memory allocated.
     Pause {
-        /// MicroVM UUID.
-        id: Uuid,
+        /// MicroVM UUID or name.
+        #[arg(value_name = "VM")]
+        target: String,
         /// Emit the resulting VM as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Resume a paused MicroVM without rebooting it.
     Resume {
-        /// MicroVM UUID.
-        id: Uuid,
+        /// MicroVM UUID or name.
+        #[arg(value_name = "VM")]
+        target: String,
         /// Emit the resulting VM as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Stop a running MicroVM.
     Stop {
-        /// MicroVM UUID.
-        id: Uuid,
+        /// MicroVM UUID or name.
+        #[arg(value_name = "VM")]
+        target: String,
         /// Emit the resulting VM as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Delete an inactive MicroVM and its disk.
     Delete {
-        /// MicroVM UUID.
-        id: Uuid,
+        /// MicroVM UUID or name.
+        #[arg(value_name = "VM")]
+        target: String,
         /// Emit a deletion acknowledgement as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a MicroVM's console transcript, including its app output.
+    Logs {
+        /// MicroVM UUID or name.
+        #[arg(value_name = "VM")]
+        target: String,
+        /// Print only the last lines of the transcript.
+        #[arg(long, value_name = "LINES")]
+        tail: Option<usize>,
+        /// Emit the API response as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -111,6 +156,31 @@ pub enum Error {
     /// Name lookup found no matching VM.
     #[error("no VM named {0:?}")]
     VmNotFound(String),
+    /// Name lookup found no matching MicroNetwork.
+    #[error("no MicroNetwork named {0:?}")]
+    NetworkNotFound(String),
+    /// Several MicroNetworks share the name, so only a UUID selects one.
+    #[error("multiple MicroNetworks named {0:?}: pass a UUID")]
+    AmbiguousNetwork(String),
+    /// `vm run` created the VM but the start request failed.
+    #[error("created VM {id} but could not start it: {source}")]
+    StartAfterCreate {
+        id: Uuid,
+        #[source]
+        source: ApiError,
+    },
+    /// A started VM left the startup path without reaching `running`.
+    #[error("VM {id} is {state} instead of running; read `firecrab vm logs {id}`")]
+    NotRunning { id: Uuid, state: &'static str },
+    /// The waiting budget ended while the VM was still starting.
+    #[error(
+        "VM {id} was still {state} after {seconds} seconds and keeps starting; check `firecrab vm list`"
+    )]
+    StartTimeout {
+        id: Uuid,
+        state: &'static str,
+        seconds: u64,
+    },
     /// Multiple VMs share the name and stdin is not a TTY so interactive
     /// selection is not possible.
     #[error("multiple VMs named {0:?}: pipe a UUID or run interactively")]
@@ -148,60 +218,63 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
             let vms: Vec<VmResponse> = client.get("/api/vms")?;
             print_output(json, &vms, format_list_human(&vms));
         }
-        Command::Create {
-            name,
-            template,
-            cpu,
-            ram,
-            disk_gb,
-            network,
-            egress,
-            storage_root,
-            volume,
-            json,
+        Command::Create(args) => {
+            let json = args.json;
+            let vm = create_vm(client, args)?;
+            print_output(json, &vm, format_vm_human(&vm));
+        }
+        Command::Run {
+            create,
+            no_wait,
+            timeout,
         } => {
-            let request = CreateVmRequest {
-                block_storages: crate::volume::resolve_mounts(client, &volume)?,
-                security_group_id: None,
-                name,
-                template,
-                ram,
-                cpu,
-                disk_gb,
-                egress_policy: egress.into(),
-                micro_network_id: network,
-                storage_root,
-                shell_ids: Vec::new(),
-                port_forwards: Vec::new(),
-                env: BTreeMap::new(),
+            let json = create.json;
+            let created = create_vm(client, create)?;
+            let started: VmResponse = client
+                .post_empty(&format!("/api/vms/{}/start", created.id))
+                .map_err(|source| Error::StartAfterCreate {
+                    id: created.id,
+                    source,
+                })?;
+            let vm = if no_wait {
+                started
+            } else {
+                wait_until_running(client, started, Duration::from_secs(timeout))?
             };
-            let vm: VmResponse = client.post("/api/vms", &request)?;
             print_output(json, &vm, format_vm_human(&vm));
         }
-        Command::Start { id, json } => {
-            let path = format!("/api/vms/{id}/start");
-            let vm: VmResponse = client.post_empty(&path)?;
-            print_output(json, &vm, format_vm_human(&vm));
-        }
-        Command::Pause { id, json } => {
-            let vm: VmResponse = client.post_empty(&format!("/api/vms/{id}/pause"))?;
-            print_output(json, &vm, format_vm_human(&vm));
-        }
-        Command::Resume { id, json } => {
-            let vm: VmResponse = client.post_empty(&format!("/api/vms/{id}/resume"))?;
-            print_output(json, &vm, format_vm_human(&vm));
-        }
-        Command::Stop { id, json } => {
-            let path = format!("/api/vms/{id}/stop");
-            let vm: VmResponse = client.post_empty(&path)?;
-            print_output(json, &vm, format_vm_human(&vm));
-        }
-        Command::Delete { id, json } => {
+        Command::Start { target, json } => change_state(client, &target, "start", json)?,
+        Command::Pause { target, json } => change_state(client, &target, "pause", json)?,
+        Command::Resume { target, json } => change_state(client, &target, "resume", json)?,
+        Command::Stop { target, json } => change_state(client, &target, "stop", json)?,
+        Command::Delete { target, json } => {
+            let id = resolve_vm_target(client, &target)?;
             client.delete(&format!("/api/vms/{id}"))?;
             if json {
                 println!("{}", format_json(&serde_json::json!({ "deleted": id })));
             } else {
                 println!("deleted VM {id}");
+            }
+        }
+        Command::Logs { target, tail, json } => {
+            let id = resolve_vm_target(client, &target)?;
+            let log: VmLogResponse = client.get(&format!("/api/vms/{id}/log"))?;
+            if json {
+                println!("{}", format_json(&log));
+            } else {
+                let text = match tail {
+                    Some(lines) => tail_lines(&log.console_log, lines),
+                    None => &log.console_log,
+                };
+                print!("{text}");
+                if !text.is_empty() && !text.ends_with('\n') {
+                    println!();
+                }
+                if log.truncated {
+                    eprintln!(
+                        "note: the API returned only the first part of a longer console log; `firecrab vm console` shows live output"
+                    );
+                }
             }
         }
         Command::Console { target } => {
@@ -210,6 +283,125 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// Sends one lifecycle action to the VM that `target` names.
+fn change_state(client: &ApiClient, target: &str, action: &str, json: bool) -> Result<(), Error> {
+    let id = resolve_vm_target(client, target)?;
+    let vm: VmResponse = client.post_empty(&format!("/api/vms/{id}/{action}"))?;
+    print_output(json, &vm, format_vm_human(&vm));
+    Ok(())
+}
+
+/// Resolves the network and volumes, then creates the VM without starting it.
+fn create_vm(client: &ApiClient, args: CreateArgs) -> Result<VmResponse, Error> {
+    let request = CreateVmRequest {
+        micro_network_id: resolve_network(client, &args.network)?,
+        block_storages: crate::volume::resolve_mounts(client, &args.volume)?,
+        security_group_id: None,
+        name: args.name,
+        template: args.template,
+        ram: args.ram,
+        cpu: args.cpu,
+        disk_gb: args.disk_gb,
+        egress_policy: args.egress.into(),
+        storage_root: args.storage_root,
+        shell_ids: Vec::new(),
+        port_forwards: args.publish,
+        // A repeated name keeps its last value, as in a shell environment.
+        env: args.env.into_iter().collect::<BTreeMap<_, _>>(),
+    };
+    Ok(client.post("/api/vms", &request)?)
+}
+
+/// Rereads a started VM until it runs, fails, or `budget` is spent.
+fn wait_until_running(
+    client: &ApiClient,
+    mut vm: VmResponse,
+    budget: Duration,
+) -> Result<VmResponse, Error> {
+    let deadline = Instant::now() + budget;
+    loop {
+        match vm.state {
+            VmState::Running => return Ok(vm),
+            VmState::Created | VmState::Starting => {}
+            state => {
+                return Err(Error::NotRunning {
+                    id: vm.id,
+                    state: state_name(state),
+                });
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::StartTimeout {
+                id: vm.id,
+                state: state_name(vm.state),
+                seconds: budget.as_secs(),
+            });
+        }
+        std::thread::sleep(START_POLL_INTERVAL);
+        vm = client.get(&format!("/api/vms/{}", vm.id))?;
+    }
+}
+
+/// Parses `HOST_PORT:GUEST_PORT[/tcp|udp]`; the protocol defaults to TCP.
+fn parse_publish(value: &str) -> Result<PortForward, String> {
+    let (ports, protocol) = match value.split_once('/') {
+        Some((ports, "tcp")) => (ports, PortProtocol::Tcp),
+        Some((ports, "udp")) => (ports, PortProtocol::Udp),
+        Some((_, other)) => return Err(format!("unknown protocol {other:?}; use tcp or udp")),
+        None => (value, PortProtocol::Tcp),
+    };
+    let port = |text: &str| text.parse::<u16>().ok().filter(|port| *port != 0);
+    match ports
+        .split_once(':')
+        .map(|(host, guest)| (port(host), port(guest)))
+    {
+        Some((Some(host_port), Some(guest_port))) => Ok(PortForward {
+            host_port,
+            guest_port,
+            protocol,
+        }),
+        _ => Err("expected HOST_PORT:GUEST_PORT[/tcp|udp] with ports from 1 to 65535".to_owned()),
+    }
+}
+
+/// Parses `NAME=VALUE`, splitting at the first `=` so values may contain it.
+fn parse_env(value: &str) -> Result<(String, String), String> {
+    match value.split_once('=') {
+        Some((name, text)) if !name.is_empty() => Ok((name.to_owned(), text.to_owned())),
+        _ => Err("expected NAME=VALUE".to_owned()),
+    }
+}
+
+/// Returns the last `count` lines of `text`, keeping its final newline.
+fn tail_lines(text: &str, count: usize) -> &str {
+    let Some(skipped_breaks) = count.checked_sub(1) else {
+        return "";
+    };
+    let body = text.strip_suffix('\n').unwrap_or(text);
+    match body.rmatch_indices('\n').nth(skipped_breaks) {
+        Some((line_break, _)) => &text[line_break + 1..],
+        None => text,
+    }
+}
+
+/// Resolves a MicroNetwork UUID or unique name to its UUID.
+///
+/// A UUID is returned without contacting the API, as in [`resolve_vm_target`].
+fn resolve_network(client: &ApiClient, target: &str) -> Result<Uuid, Error> {
+    if let Ok(uuid) = Uuid::parse_str(target) {
+        return Ok(uuid);
+    }
+    let networks: Vec<MicroNetworkResponse> = client.get("/api/micro-networks")?;
+    let mut matches = networks
+        .into_iter()
+        .filter(|network| network.name == target);
+    match (matches.next(), matches.next()) {
+        (Some(network), None) => Ok(network.id),
+        (None, _) => Err(Error::NetworkNotFound(target.to_owned())),
+        (Some(_), Some(_)) => Err(Error::AmbiguousNetwork(target.to_owned())),
+    }
 }
 
 /// Resolves a `target` string (UUID or VM name) to a VM UUID.
@@ -402,7 +594,7 @@ mod tests {
         .unwrap();
 
         match cli.command {
-            Command::Create {
+            Command::Create(CreateArgs {
                 name,
                 template,
                 cpu,
@@ -412,19 +604,172 @@ mod tests {
                 egress,
                 storage_root,
                 volume,
+                publish,
+                env,
                 json,
-            } => {
+            }) => {
                 assert_eq!(name, "web-1");
                 assert_eq!(template, "alpine-3.24.1");
                 assert_eq!((cpu, ram, disk_gb), (1, 512, 2));
-                assert_eq!(network, id("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"));
+                assert_eq!(network, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
                 assert_eq!(egress, EgressArg::Internet);
                 assert_eq!(storage_root, None);
                 assert!(volume.is_empty());
+                assert!(publish.is_empty());
+                assert!(env.is_empty());
                 assert!(!json);
             }
             _ => panic!("expected create command"),
         }
+    }
+
+    #[test]
+    fn publish_defaults_to_tcp_and_accepts_udp() {
+        assert_eq!(
+            parse_publish("8080:80"),
+            Ok(PortForward {
+                host_port: 8080,
+                guest_port: 80,
+                protocol: PortProtocol::Tcp,
+            })
+        );
+        assert_eq!(
+            parse_publish("5353:53/udp"),
+            Ok(PortForward {
+                host_port: 5353,
+                guest_port: 53,
+                protocol: PortProtocol::Udp,
+            })
+        );
+        assert_eq!(
+            parse_publish("65535:1/tcp").map(|rule| (rule.host_port, rule.guest_port)),
+            Ok((65535, 1))
+        );
+    }
+
+    #[test]
+    fn publish_rejects_missing_zero_and_out_of_range_ports() {
+        for value in [
+            "80", "8080:", ":80", "0:80", "8080:0", "65536:80", "a:b", "1:2:3", "",
+        ] {
+            assert!(parse_publish(value).is_err(), "{value:?} must be rejected");
+        }
+        assert_eq!(
+            parse_publish("8080:80/sctp").unwrap_err(),
+            "unknown protocol \"sctp\"; use tcp or udp"
+        );
+    }
+
+    #[test]
+    fn env_splits_at_the_first_equals_sign() {
+        assert_eq!(parse_env("A=1"), Ok(("A".to_owned(), "1".to_owned())));
+        assert_eq!(
+            parse_env("URL=http://a.test/?b=c"),
+            Ok(("URL".to_owned(), "http://a.test/?b=c".to_owned()))
+        );
+        assert_eq!(parse_env("EMPTY="), Ok(("EMPTY".to_owned(), String::new())));
+    }
+
+    #[test]
+    fn env_rejects_a_missing_name_or_separator() {
+        for value in ["NAME", "=value", ""] {
+            assert!(parse_env(value).is_err(), "{value:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn tail_keeps_only_the_last_lines() {
+        assert_eq!(tail_lines("a\nb\nc\n", 2), "b\nc\n");
+        assert_eq!(tail_lines("a\nb\nc\n", 1), "c\n");
+        assert_eq!(tail_lines("a\nb\nc", 1), "c");
+        assert_eq!(tail_lines("a\nb\nc\n", 3), "a\nb\nc\n");
+        assert_eq!(tail_lines("a\nb\nc\n", 9), "a\nb\nc\n");
+        assert_eq!(tail_lines("a\nb\nc\n", 0), "");
+        assert_eq!(tail_lines("", 4), "");
+    }
+
+    #[test]
+    fn a_network_uuid_resolves_without_contacting_the_api() {
+        let client = ApiClient::new("http://127.0.0.1:1".to_owned());
+        let network = id("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+        assert_eq!(
+            resolve_network(&client, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap(),
+            network
+        );
+        assert!(matches!(
+            resolve_network(&client, "lab"),
+            Err(Error::Api(_))
+        ));
+    }
+
+    #[test]
+    fn run_shares_create_options_and_adds_waiting_controls() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "run",
+            "--name",
+            "web-1",
+            "--template",
+            "alpine-3.24.1",
+            "--network",
+            "lab",
+            "-p",
+            "8080:80",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Run {
+                create,
+                no_wait,
+                timeout,
+            } => {
+                assert_eq!(create.network, "lab");
+                assert_eq!(create.publish.len(), 1);
+                assert!(!no_wait);
+                assert_eq!(timeout, 120);
+            }
+            _ => panic!("expected run command"),
+        }
+
+        let cli = TestCli::try_parse_from([
+            "test",
+            "run",
+            "--name",
+            "web-1",
+            "--template",
+            "alpine-3.24.1",
+            "--network",
+            "lab",
+            "--no-wait",
+            "--timeout",
+            "30",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Run {
+                no_wait: true,
+                timeout: 30,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_failed_start_after_create_names_the_created_vm() {
+        let error = Error::StartAfterCreate {
+            id: id("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            source: ApiError::Http {
+                status: 409,
+                body: "host port 8080 is in use".to_owned(),
+            },
+        };
+        let text = error.to_string();
+        assert!(
+            text.starts_with("created VM aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa but could not start"),
+            "{text}"
+        );
+        assert!(text.contains("host port 8080 is in use"), "{text}");
     }
 
     #[test]
@@ -453,7 +798,7 @@ mod tests {
         .unwrap();
 
         match cli.command {
-            Command::Create {
+            Command::Create(CreateArgs {
                 cpu,
                 ram,
                 disk_gb,
@@ -461,7 +806,7 @@ mod tests {
                 storage_root,
                 json,
                 ..
-            } => {
+            }) => {
                 assert_eq!((cpu, ram, disk_gb), (4, 2048, 20));
                 assert_eq!(egress, EgressArg::Isolated);
                 assert_eq!(storage_root.as_deref(), Some("fast"));
@@ -472,34 +817,24 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_commands_require_uuid_ids() {
-        assert!(TestCli::try_parse_from(["test", "start", "not-a-uuid"]).is_err());
-        let cli = TestCli::try_parse_from([
-            "test",
-            "stop",
-            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            "--json",
-        ])
-        .unwrap();
-        assert!(matches!(cli.command, Command::Stop { json: true, .. }));
-    }
-
-    #[test]
-    fn pause_resume_commands_require_uuid_and_support_json() {
-        for action in ["pause", "resume"] {
-            assert!(TestCli::try_parse_from(["test", action, "bad-id"]).is_err());
-            let parsed = TestCli::try_parse_from([
-                "test",
-                action,
-                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-                "--json",
-            ])
-            .unwrap();
-            assert!(matches!(
-                parsed.command,
-                Command::Pause { json: true, .. } | Command::Resume { json: true, .. }
-            ));
+    fn lifecycle_commands_accept_a_uuid_or_a_name() {
+        for target in ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "web-1"] {
+            for action in ["start", "pause", "resume", "stop", "delete", "logs"] {
+                let cli = TestCli::try_parse_from(["test", action, target, "--json"]).unwrap();
+                let (parsed, json) = match cli.command {
+                    Command::Start { target, json }
+                    | Command::Pause { target, json }
+                    | Command::Resume { target, json }
+                    | Command::Stop { target, json }
+                    | Command::Delete { target, json }
+                    | Command::Logs { target, json, .. } => (target, json),
+                    other => panic!("unexpected command for {action}: {other:?}"),
+                };
+                assert_eq!(parsed, target, "vm {action}");
+                assert!(json, "vm {action} --json");
+            }
         }
+        assert!(TestCli::try_parse_from(["test", "start"]).is_err());
         assert_eq!(state_name(VmState::Paused), "paused");
     }
 

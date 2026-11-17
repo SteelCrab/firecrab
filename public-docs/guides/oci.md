@@ -57,6 +57,35 @@ The imported image preserves supported systemd/OpenRC init; other images use Bus
 Its container entrypoint runs as a service after network readiness.
 `EXPOSE` metadata does not create host port forwards; configure them on the VM.
 
+## Run and inspect
+
+`vm run` takes the options of `vm create`, creates the VM, and starts it:
+
+```sh
+firecrab vm run --name web --template nginx-1.27 --network NETWORK \
+  --publish 8080:80 --env GREETING=hello
+firecrab vm logs web --tail 20
+firecrab vm stop web
+firecrab vm delete web
+firecrab image delete nginx-1.27
+```
+
+`NETWORK` is a MicroNetwork UUID or name, and `web` can be the VM's UUID instead.
+A name that several VMs share asks which one to use; scripts should pass the UUID.
+
+| Option or command | Behavior |
+| --- | --- |
+| `--publish HOST_PORT:GUEST_PORT[/tcp\|udp]` (`-p`) | Forwards a host port to the guest; repeat it for more ports. The protocol defaults to TCP |
+| `--env NAME=VALUE` (`-e`) | Sets the image app's [environment](../reference/guest-runtime.md#environment) in plaintext; a repeated name keeps its last value |
+| `--timeout SECONDS` | Waits this long for `running`; the default is 120. Reaching it exits `1` and does not stop the VM |
+| `--no-wait` | Returns after the API accepts the start request |
+| `vm logs VM [--tail LINES] [--json]` | Prints the console transcript, which includes the app's output |
+| `image delete ALIAS` | Removes an installed image by the alias that `image list` shows |
+
+`vm run` exits `1` when the VM fails to start.
+A VM that was created but could not start stays in `created`; the error names its UUID.
+The API returns only the first part of a long console transcript; use `vm console` for live output.
+
 First boot may install SSH and other packages.
 Network readiness does not establish SSH readiness.
 Activation scripts are embedded at import time; host upgrades do not update existing templates.

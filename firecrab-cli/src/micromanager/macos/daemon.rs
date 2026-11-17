@@ -514,6 +514,21 @@ fn api_reachable(layout: &Layout, paths: &DaemonPaths) -> bool {
         .is_ok_and(|response| response.status().is_success())
 }
 
+/// Shell function that makes `$ssh_control_dir` exist as this user's private directory.
+///
+/// It applies the rules of [`super::ssh::prepare`] from inside the wrapper,
+/// because launchd restarts the wrapper without running the CLI again. An
+/// empty variable means connections are not reused and nothing is prepared.
+const SSH_CONTROL_PREPARE: &str = r#"prepare_ssh_control() {
+  [ -n "$ssh_control_dir" ] || return 0
+  /bin/mkdir -m 0700 "$ssh_control_dir" 2>/dev/null || true
+  [ -d "$ssh_control_dir" ] && [ ! -L "$ssh_control_dir" ] && [ -O "$ssh_control_dir" ] || return 1
+  case "$(/usr/bin/stat -f %Lp "$ssh_control_dir")" in
+    *00) return 0 ;;
+    *) return 1 ;;
+  esac
+}"#;
+
 fn private_tunnel_start(api_port: u16, control_attempts: u32) -> String {
     format!(
         r#"  rm -f "$tunnel_control" || return 1
@@ -557,6 +572,10 @@ fn render_wrapper(
     };
     let command_ssh_options = ssh_options(super::ssh::Session::Command);
     let tunnel_ssh_options = ssh_options(super::ssh::Session::Tunnel);
+    let ssh_control_dir =
+        super::ssh::control_directory(&layout.managed_home.join("runtime"), &settings.ssh)
+            .map(|directory| shell_quote(&directory))
+            .unwrap_or_default();
     let reconnect_attempts = settings.ssh.reconnect_attempts;
     let reconnect_delay = settings.ssh.reconnect_delay_secs;
     let restart_vm = settings.ssh.restart_vm_on_failure;
@@ -621,6 +640,7 @@ known_hosts_option={known_hosts_option}
 platform={platform}
 command_ssh_options=({command_ssh_options})
 tunnel_ssh_options=({tunnel_ssh_options})
+ssh_control_dir={ssh_control_dir}
 vm_process="$root/runtime/vm-process"
 vm_pid=
 tunnel_pid=
@@ -682,7 +702,12 @@ done
 test -f "$manager_ready"
 ip=$(sed -n 's/^ip=//p' "$manager_ready")
 test -n "$ip"
+{SSH_CONTROL_PREPARE}
 open_tunnel() {{
+  prepare_ssh_control || {{
+    echo "SSH control directory $ssh_control_dir must be a private directory of this user" >&2
+    return 1
+  }}
 {tunnel_connect}
   for _ in $(seq 1 60); do
     if /usr/bin/curl -fsS --max-time 2 http://127.0.0.1:{api_port}/api/host >/dev/null; then
@@ -1234,6 +1259,84 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn the_wrapper_prepares_its_ssh_control_directory_before_each_tunnel() {
+        let directory = tempfile::tempdir().unwrap();
+        let layout = Layout {
+            install_dir: directory.path().join("bin"),
+            managed_home: directory.path().join("micromanager"),
+        };
+        let runtime = layout.managed_home.join("runtime");
+        let paths = DaemonPaths {
+            label: LABEL.into(),
+            api_port: 5523,
+            plist: directory.path().join("agent.plist"),
+            wrapper: runtime.join("daemon.sh"),
+            ready: runtime.join("daemon-ready"),
+            manager_ready: runtime.join("manager-ready"),
+            log: runtime.join("daemon.log"),
+            platform: runtime.join("host-platform.json"),
+        };
+        let render = |settings: &Runtime| {
+            render_wrapper(
+                &layout,
+                &layout.helper_path(),
+                &runtime.join("key"),
+                &paths,
+                settings,
+            )
+        };
+
+        let reused = Runtime::default();
+        let control = super::super::ssh::control_directory(&runtime, &reused.ssh).unwrap();
+        let script = render(&reused);
+        assert!(script.contains(&format!("ssh_control_dir={}\n", shell_quote(&control))));
+        assert!(
+            script.contains("open_tunnel() {\n  prepare_ssh_control || {"),
+            "every tunnel attempt prepares the directory first"
+        );
+
+        let mut separate = Runtime::default();
+        separate.ssh.reuse_connections = false;
+        assert!(render(&separate).contains("ssh_control_dir=\n"));
+    }
+
+    #[test]
+    fn ssh_control_preparation_restores_a_removed_directory_and_rejects_an_unsafe_one() {
+        let root = tempfile::tempdir().unwrap();
+        let control = root.path().join("control dir");
+        let prepare = |directory: &str| {
+            ProcessCommand::new("/bin/bash")
+                .arg("-c")
+                .arg(format!(
+                    "set -Eeuo pipefail\nssh_control_dir={directory}\n{SSH_CONTROL_PREPARE}\nprepare_ssh_control\n"
+                ))
+                .status()
+                .unwrap()
+                .success()
+        };
+        let quoted = shell_quote(&control);
+
+        assert!(prepare(&quoted), "a removed directory is created again");
+        assert_eq!(
+            fs::metadata(&control).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert!(prepare(&quoted), "an existing private directory is kept");
+
+        fs::set_permissions(&control, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            !prepare(&quoted),
+            "a directory others can enter is rejected"
+        );
+
+        fs::remove_dir(&control).unwrap();
+        std::os::unix::fs::symlink(root.path(), &control).unwrap();
+        assert!(!prepare(&quoted), "a symlink is rejected");
+
+        assert!(prepare(""), "nothing is prepared without connection reuse");
+    }
+
     fn write_executable(path: &Path, body: &str) {
         fs::write(path, body).unwrap();
         fs::set_permissions(path, Permissions::from_mode(0o755)).unwrap();
@@ -1359,6 +1462,17 @@ mod tests {
                 == if failure_at == 1 { 2 } else { 1 })
             .then_some(())
         });
+        // Temporary-file cleanup can remove the control directory while the
+        // wrapper runs; the next tunnel attempt must not depend on the CLI.
+        let control = super::super::ssh::control_directory(&runtime, &settings.ssh);
+        if let Some(control) = &control {
+            assert_eq!(
+                fs::metadata(control).unwrap().permissions().mode() & 0o777,
+                0o700,
+                "the wrapper creates its control directory"
+            );
+            fs::remove_dir(control).unwrap();
+        }
         signal(&first["tunnel_pid"], "-KILL");
         let second = wait_for("a reconnected tunnel", || {
             read_marker(&paths.ready).filter(|marker| {
@@ -1370,6 +1484,12 @@ mod tests {
         });
 
         assert_eq!(second["vm_pid"], first["vm_pid"], "the VM keeps running");
+        if let Some(control) = &control {
+            assert!(
+                control.is_dir(),
+                "a reconnect creates the removed control directory again"
+            );
+        }
         wait_for("the second tunnel invocation", || {
             (fs::read_to_string(&tunnels).ok()?.lines().count()
                 == if failure_at > 0 { 3 } else { 2 })
@@ -1389,6 +1509,15 @@ mod tests {
             .unwrap()
             .success();
         assert!(!vm_alive, "stopping the wrapper stops the VM");
+        remove_ssh_control(&runtime, &settings);
+    }
+
+    /// The wrapper creates its shared control directory in `/private/tmp`,
+    /// outside the test's temporary home, so a test that runs it removes it.
+    fn remove_ssh_control(runtime: &Path, settings: &Runtime) {
+        if let Some(control) = super::super::ssh::control_directory(runtime, &settings.ssh) {
+            let _ = fs::remove_dir(control);
+        }
     }
 
     #[test]
@@ -1535,6 +1664,7 @@ esac
             !control_directory.exists(),
             "only this wrapper's control directory is removed"
         );
+        remove_ssh_control(&runtime, &settings);
     }
 
     #[test]

@@ -40,6 +40,14 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Delete an installed template image from the host.
+    Delete {
+        /// Installed image alias shown by `image list`, such as `nginx-1.27`.
+        alias: String,
+        /// Emit a deletion acknowledgement as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Errors produced while executing an image command.
@@ -49,6 +57,8 @@ pub enum Error {
     Api(ApiError),
     /// A background OCI import reached the failed state.
     ImportFailed { alias: String, detail: String },
+    /// The value cannot name an image, so no request is sent for it.
+    InvalidAlias(String),
 }
 
 impl From<ApiError> for Error {
@@ -64,8 +74,23 @@ impl std::fmt::Display for Error {
             Self::ImportFailed { alias, detail } => {
                 write!(f, "OCI import {alias} failed: {detail}")
             }
+            Self::InvalidAlias(alias) => write!(
+                f,
+                "{alias:?} is not an image alias; use an ALIAS from `firecrab image list`"
+            ),
         }
     }
+}
+
+/// Whether `alias` is one URL path segment made of template-name characters.
+///
+/// Deleting is destructive, so a value such as `../vms/ID` must never be
+/// joined into a path that addresses another resource.
+fn is_alias(alias: &str) -> bool {
+    alias.starts_with(|first: char| first.is_ascii_alphanumeric())
+        && alias
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// Executes one image command through the host API.
@@ -98,6 +123,17 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
             let snapshot: ImageInstallResponse = client.get(&format!("/api/oci/import/{alias}"))?;
             print_import_snapshot(&snapshot, json);
             ensure_import_succeeded_or_active(&snapshot)?;
+        }
+        Command::Delete { alias, json } => {
+            if !is_alias(&alias) {
+                return Err(Error::InvalidAlias(alias));
+            }
+            client.delete(&format!("/api/images/{alias}"))?;
+            if json {
+                print_json(&serde_json::json!({ "deleted": alias }));
+            } else {
+                println!("deleted image {alias}");
+            }
         }
     }
     Ok(())

@@ -708,12 +708,12 @@ mod tests {
         assert!(matches!(
             create.command,
             Command::Vm {
-                command: vm::Command::Create {
+                command: vm::Command::Create(vm::CreateArgs {
                     cpu: 1,
                     ram: 512,
                     disk_gb: 2,
                     ..
-                }
+                })
             }
         ));
 
@@ -844,7 +844,9 @@ mod tests {
     fn cli_rejects_missing_create_arguments_and_bad_uuid() {
         assert!(Cli::try_parse_from(["firecrab", "vm", "create"]).is_err());
         assert!(Cli::try_parse_from(["firecrab", "network", "create"]).is_err());
-        assert!(Cli::try_parse_from(["firecrab", "vm", "start", "not-a-uuid"]).is_err());
+        assert!(Cli::try_parse_from(["firecrab", "network", "delete", "not-a-uuid"]).is_err());
+        // A VM is also addressed by name, so its target is resolved at run time.
+        assert!(Cli::try_parse_from(["firecrab", "vm", "start", "web-1"]).is_ok());
     }
 
     #[test]
