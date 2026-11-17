@@ -584,6 +584,46 @@ fn run_once(args: &[&str], status: &str, body: &str) -> (i32, CapturedRequest) {
     (code, server.join().unwrap())
 }
 
+/// Answers one connection per scripted response, in order, and returns the
+/// requests the command actually sent. A command that stops early leaves the
+/// rest unanswered; one that sends more is refused and fails.
+fn run_sequence(args: &[&str], responses: &[(&str, String)]) -> (i32, Vec<CapturedRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let responses: Vec<(String, Vec<u8>)> = responses
+        .iter()
+        .map(|(status, body)| ((*status).to_owned(), body.as_bytes().to_vec()))
+        .collect();
+    let (sender, received) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        for (status, response) in responses {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let request = read_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response.len()
+            )
+            .unwrap();
+            stream.write_all(&response).unwrap();
+            if sender.send(request).is_err() {
+                return;
+            }
+        }
+    });
+
+    let mut argv = vec!["firecrab", "--api", base.as_str()];
+    argv.extend_from_slice(args);
+    let code = run(Cli::try_parse_from(argv).unwrap());
+    (code, received.try_iter().collect())
+}
+
+fn sent(request: &CapturedRequest) -> (&str, &str) {
+    (request.method.as_str(), request.path.as_str())
+}
+
 fn read_request(stream: &mut TcpStream) -> CapturedRequest {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 1024];
@@ -860,6 +900,283 @@ fn vm_commands_match_the_lifecycle_api() {
         (delete.method.as_str(), delete.path.as_str()),
         ("DELETE", format!("/api/vms/{VM_ID}").as_str())
     );
+}
+
+fn vm_in_state(state: &str) -> String {
+    let mut vm = vm_response();
+    vm["state"] = json!(state);
+    vm.to_string()
+}
+
+#[test]
+fn vm_lifecycle_commands_accept_a_name_and_act_on_its_uuid() {
+    let list = json!([vm_response()]).to_string();
+    for action in ["start", "pause", "resume", "stop"] {
+        let (code, requests) = run_sequence(
+            &["vm", action, "web-1", "--json"],
+            &[("200 OK", list.clone()), ("200 OK", vm_in_state("running"))],
+        );
+        assert_eq!(code, 0, "vm {action} web-1");
+        assert_eq!(sent(&requests[0]), ("GET", "/api/vms"));
+        assert_eq!(
+            sent(&requests[1]),
+            ("POST", format!("/api/vms/{VM_ID}/{action}").as_str())
+        );
+    }
+
+    let (code, requests) = run_sequence(
+        &["vm", "delete", "web-1"],
+        &[("200 OK", list), ("204 No Content", String::new())],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        sent(&requests[1]),
+        ("DELETE", format!("/api/vms/{VM_ID}").as_str())
+    );
+}
+
+#[test]
+fn vm_lifecycle_commands_change_nothing_for_an_unknown_name() {
+    let (code, requests) = run_sequence(
+        &["vm", "stop", "missing"],
+        &[
+            ("200 OK", "[]".to_owned()),
+            ("200 OK", vm_in_state("stopped")),
+        ],
+    );
+    assert_eq!(code, 1);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(sent(&requests[0]), ("GET", "/api/vms"));
+}
+
+#[test]
+fn vm_create_sends_published_ports_and_environment() {
+    let (code, create) = run_once(
+        &[
+            "vm",
+            "create",
+            "--name",
+            "web-1",
+            "--template",
+            "nginx-1.27",
+            "--network",
+            NETWORK_ID,
+            "-p",
+            "8080:80",
+            "--publish",
+            "5353:53/udp",
+            "-e",
+            "GREETING=replaced",
+            "-e",
+            "GREETING=hello",
+            "--env",
+            "URL=http://a.test/?b=c",
+        ],
+        "201 Created",
+        &vm_in_state("created"),
+    );
+    assert_eq!(code, 0);
+    let body: Value = serde_json::from_slice(&create.body).unwrap();
+    assert_eq!(
+        body["portForwards"],
+        json!([
+            {"hostPort": 8080, "guestPort": 80, "protocol": "tcp"},
+            {"hostPort": 5353, "guestPort": 53, "protocol": "udp"}
+        ])
+    );
+    assert_eq!(
+        body["env"],
+        json!({"GREETING": "hello", "URL": "http://a.test/?b=c"})
+    );
+}
+
+#[test]
+fn vm_create_resolves_a_network_name_to_its_uuid() {
+    let networks = json!([network_response()]).to_string();
+    let args = [
+        "vm",
+        "create",
+        "--name",
+        "web-1",
+        "--template",
+        "alpine-3.24.1",
+        "--network",
+        "lab",
+    ];
+    let (code, requests) = run_sequence(
+        &args,
+        &[
+            ("200 OK", networks),
+            ("201 Created", vm_in_state("created")),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(sent(&requests[0]), ("GET", "/api/micro-networks"));
+    assert_eq!(sent(&requests[1]), ("POST", "/api/vms"));
+    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(body["microNetworkId"], NETWORK_ID);
+
+    let (code, requests) = run_sequence(
+        &args,
+        &[
+            ("200 OK", "[]".to_owned()),
+            ("201 Created", vm_in_state("created")),
+        ],
+    );
+    assert_eq!(code, 1, "an unknown network name must not create a VM");
+    assert_eq!(requests.len(), 1);
+}
+
+const RUN_ARGS: [&str; 10] = [
+    "vm",
+    "run",
+    "--name",
+    "web-1",
+    "--template",
+    "alpine-3.24.1",
+    "--network",
+    NETWORK_ID,
+    "-p",
+    "8080:80",
+];
+
+#[test]
+fn vm_run_creates_the_vm_then_starts_it() {
+    let (code, requests) = run_sequence(
+        &RUN_ARGS,
+        &[
+            ("201 Created", vm_in_state("created")),
+            ("200 OK", vm_in_state("running")),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(sent(&requests[0]), ("POST", "/api/vms"));
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["portForwards"][0]["hostPort"], 8080);
+    assert_eq!(
+        sent(&requests[1]),
+        ("POST", format!("/api/vms/{VM_ID}/start").as_str())
+    );
+    assert_eq!(requests.len(), 2);
+}
+
+#[test]
+fn vm_run_waits_until_the_started_vm_is_running() {
+    let (code, requests) = run_sequence(
+        &RUN_ARGS,
+        &[
+            ("201 Created", vm_in_state("created")),
+            ("200 OK", vm_in_state("starting")),
+            ("200 OK", vm_in_state("running")),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        sent(&requests[2]),
+        ("GET", format!("/api/vms/{VM_ID}").as_str())
+    );
+}
+
+#[test]
+fn vm_run_fails_when_the_vm_does_not_reach_running() {
+    let (code, requests) = run_sequence(
+        &RUN_ARGS,
+        &[
+            ("201 Created", vm_in_state("created")),
+            ("200 OK", vm_in_state("starting")),
+            ("200 OK", vm_in_state("error")),
+        ],
+    );
+    assert_eq!(code, 1);
+    assert_eq!(requests.len(), 3);
+
+    let mut args = RUN_ARGS.to_vec();
+    args.extend(["--timeout", "0"]);
+    let (code, requests) = run_sequence(
+        &args,
+        &[
+            ("201 Created", vm_in_state("created")),
+            ("200 OK", vm_in_state("starting")),
+            ("200 OK", vm_in_state("running")),
+        ],
+    );
+    assert_eq!(code, 1, "a spent waiting budget is reported as a failure");
+    assert_eq!(requests.len(), 2);
+}
+
+#[test]
+fn vm_run_no_wait_returns_after_the_start_request() {
+    let mut args = RUN_ARGS.to_vec();
+    args.push("--no-wait");
+    let (code, requests) = run_sequence(
+        &args,
+        &[
+            ("201 Created", vm_in_state("created")),
+            ("200 OK", vm_in_state("starting")),
+            ("200 OK", vm_in_state("running")),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(requests.len(), 2);
+}
+
+#[test]
+fn vm_logs_reads_the_console_transcript_of_a_named_vm() {
+    let log = json!({"consoleLog": "booting\nready\n", "truncated": false}).to_string();
+    let (code, requests) = run_sequence(
+        &["vm", "logs", "web-1", "--tail", "1"],
+        &[
+            ("200 OK", json!([vm_response()]).to_string()),
+            ("200 OK", log.clone()),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        sent(&requests[1]),
+        ("GET", format!("/api/vms/{VM_ID}/log").as_str())
+    );
+
+    let (code, request) = run_once(&["vm", "logs", VM_ID, "--json"], "200 OK", &log);
+    assert_eq!(code, 0);
+    assert_eq!(request.path, format!("/api/vms/{VM_ID}/log"));
+}
+
+#[test]
+fn image_delete_removes_the_installed_template() {
+    let (code, delete) = run_once(
+        &["image", "delete", "nginx-1.27", "--json"],
+        "204 No Content",
+        "",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        (delete.method.as_str(), delete.path.as_str()),
+        ("DELETE", "/api/images/nginx-1.27")
+    );
+
+    let (code, _) = run_once(
+        &["image", "delete", "missing"],
+        "404 Not Found",
+        r#"{"error":{"code":"not_found","message":"resource not found"}}"#,
+    );
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn image_delete_sends_nothing_for_a_value_that_is_not_an_alias() {
+    for value in [
+        "../vms/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "..",
+        "a/b",
+        "",
+    ] {
+        let (code, requests) = run_sequence(
+            &["image", "delete", value],
+            &[("204 No Content", String::new())],
+        );
+        assert_eq!(code, 1, "{value:?}");
+        assert!(requests.is_empty(), "{value:?} reached the API");
+    }
 }
 
 const POOL_ID: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";

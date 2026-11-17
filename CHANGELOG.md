@@ -27,6 +27,19 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- `firecrab vm run` creates a MicroVM and starts it in one step. It takes the
+  options of `vm create`, waits up to `--timeout` seconds (default 120) for
+  `running`, and exits 1 when the VM fails or is still starting. `--no-wait`
+  returns after the start request. A VM that was created but could not start
+  stays in `created`, and the error names its UUID.
+- `firecrab vm create` and `vm run` accept repeated
+  `--publish HOST_PORT:GUEST_PORT[/tcp|udp]` (`-p`) and `--env NAME=VALUE`
+  (`-e`) options. The API already stored port forwards and environment values;
+  the CLI could not send them.
+- `firecrab vm logs VM` prints a MicroVM's console transcript, which includes
+  the image app's output. `--tail LINES` prints its last lines and `--json`
+  prints the API response.
+- `firecrab image delete ALIAS` removes an installed image.
 - AI Sandbox **Workspace** has **Rename**. It opens an inline field (Enter
   saves, Esc cancels) and renames the workspace and its VM together, so AI
   Sandbox, the MicroVM list and the CODE › VS Code project card show the new
@@ -63,6 +76,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
+- `firecrab vm start`, `pause`, `resume`, `stop` and `delete` accept a VM name
+  as well as a UUID, as `vm console` already did. A name that several VMs share
+  asks which one to use in a terminal and fails in a script. `--network` on
+  `vm create` accepts a MicroNetwork name as well as a UUID.
 - The CODE menu now opens **VS Code**, a read-only list of projects linked in
   AI Sandbox. Each open agent session has one link to its AI Sandbox editor.
   macOS and Windows hosts show their own service commands when the main server
@@ -91,6 +108,13 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- macOS microManager connects again after its SSH control directory under
+  `/private/tmp` is removed, for example by temporary-file cleanup. Before, the
+  service could not open its API tunnel, restarted the management VM again and
+  again, and `firecrab service status` reported the API as unreachable until
+  `firecrab service repair`. The service now creates the directory again before
+  each tunnel attempt, and refuses a directory that is not private to the user.
+  The fix applies the next time the service starts with the updated CLI.
 - AI Sandbox sessions work again after their MicroVM stops and starts. The next
   status refresh starts the VM's Herdr runtime and reconnects each open session
   in its folder. Claude Code and Codex continue their saved conversation; a
